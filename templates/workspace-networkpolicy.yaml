@@ -1,0 +1,77 @@
+---
+# ワークスペース隔離の NetworkPolicy。podSelector: {} でネームスペース内の全 Pod に適用し、
+# policyTypes に Ingress/Egress 両方を指定することで既定 deny へ切り替える (14.7/14.8)。
+#
+# ingress: 同一 namespace 内の Pod 間のみ許可する (namespaceSelector を伴わない
+# podSelector: {} は Kubernetes 標準の挙動として「同一 namespace 内」を意味する)。他
+# namespace からの到達は拒否する。開発者接続は共有ゲートウェイ経由の IngressRoute の話であり、
+# 本 NetworkPolicy の対象外 (Terminal Gateway の到達経路は別タスクで確定する)。
+#
+# egress: 同一 namespace 内 Pod、devplatform-db namespace (ブランチ専用 DB、5432/tcp)、
+# garage namespace (退避・レポート保管先のオブジェクトストレージ、3900/tcp)、kube-system
+# namespace (CoreDNS と Traefik forward auth 解決) への到達を許可する。加えて外部
+# (クラスタ内 Pod/Service CIDR を除いた 0.0.0.0/0) への 443/53 番ポートのみを許可し、
+# Git リモートと Anthropic API への到達を確保する。
+#
+# ponytail: kube-router (k3s既定CNI) はL3/L4のNetworkPolicyのみでFQDN単位のegressフィルタに
+# 対応しないため、Git リモート・Anthropic API を宛先IPで絞れず443番ポート全体を外部へ開ける
+# 現実解にとどめている。FQDN制限が必要になったら、CiliumNetworkPolicyのfqdn selectorへの
+# 移行、またはegressプロキシの経由が upgrade path。
+#
+# 他 namespace の Secret への到達遮断はネットワーク到達性の話ではなく kube-apiserver 経由の
+# API アクセス制御の話のため、NetworkPolicy の対象外とする。Secret 保護は
+# controller-rbac.yaml の Role スコープ (workspaceNamespace 限定) 側で担保する (14.8)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devplatform-workspace-isolation
+  namespace: {{ .Values.workspaceNamespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: devplatform-db
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: garage
+      ports:
+        - protocol: TCP
+          port: 3900
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.42.0.0/16
+              - 10.43.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53

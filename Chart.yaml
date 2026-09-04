@@ -1,0 +1,6 @@
+apiVersion: v2
+name: devplatform
+description: Autonomous parallel dev platform control plane and shared terminal gateway
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

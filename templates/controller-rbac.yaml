@@ -1,0 +1,61 @@
+---
+# ワークスペース操作用 ServiceAccount。Workspace Controller Pod (devplatform namespace) が
+# mount するため Release.Namespace 側に置き、実際の権限は workspaceNamespace 側の
+# Role/RoleBinding (下記) で束縛する。後続タスク 9.9 で Hermes Agent がこの SA (または同じ
+# Role を束縛した別 SA) を参照する想定のため、名前は用途がわかる devplatform-workspace-operator
+# のままにする。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devplatform-workspace-operator
+  namespace: {{ .Release.Namespace }}
+---
+# クラスタ全体の管理権限 (ClusterRole/ClusterRoleBinding) は使わず、workspaceNamespace に
+# 束縛した namespace-scoped Role のみを与える (14.1/14.2)。namespaces一覧・
+# clusterrolebindings等のクラスタスコープ動詞は含めない。
+#
+# ここに含めるのは workspaceNamespace 内で完結するリソースのみ。ブランチ専用 DB の
+# Database/DatabaseRole (postgresql.cnpg.io) は devplatform-db namespace に存在するため
+# 本 Role の対象外とする。CNPG 連携を実装するタスクで、devplatform-db namespace 側に
+# 同じ SA を束縛する別の Role/RoleBinding を追加する (本タスクの範囲外)。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplatform-workspace-operator
+  namespace: {{ .Values.workspaceNamespace }}
+rules:
+  - apiGroups: ["devplatform.fickledev.com"]
+    resources: ["workspaces", "workspaces/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["devplatform.fickledev.com"]
+    resources: ["workspacetemplates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "services", "secrets", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["traefik.io"]
+    resources: ["ingressroutes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplatform-workspace-operator
+  namespace: {{ .Values.workspaceNamespace }}
+subjects:
+  - kind: ServiceAccount
+    name: devplatform-workspace-operator
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: devplatform-workspace-operator
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,129 @@
+---
+# Workspace Controller (制御プレーン)。design.md の Control Plane は状態ストアを
+# Kubernetes API のみに置き独自データベースを持たないため、persistence は
+# 既定で無効。将来ローカルキャッシュ等が必要になった場合の宣言先として用意する。
+controller:
+  image:
+    repository: busybox
+    tag: "1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+  # 実コンテナは後続タスクで実装する。プレースホルダとして起動し続けるだけ。
+  command: ["sleep", "infinity"]
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "64Mi"
+    limits:
+      memory: "64Mi"
+  # ワークスペースの配置ノード (k3s-agent-z440、apps/garage と同一) に固定し、
+  # 制御プレーンとワークスペース間のノード外ネットワーク越しレイテンシを避ける。
+  nodeSelector:
+    kubernetes.io/hostname: k3s-agent-z440
+  persistence:
+    enabled: false
+    name: devplatform-controller-data
+    storageClass: local-path
+    size: 1Gi
+
+# Terminal Gateway (共有端末ゲートウェイ)。ホスト名解決を都度 Kubernetes API へ
+# 問い合わせるだけのステートレス構成のため永続データを持たない。
+gateway:
+  image:
+    repository: busybox
+    tag: "1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+  command: ["sleep", "infinity"]
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "64Mi"
+    limits:
+      memory: "64Mi"
+  nodeSelector:
+    kubernetes.io/hostname: k3s-agent-z440
+
+# ワークスペース専用ネームスペース名。Workspace / WorkspaceTemplate はここに置く。
+# workspace-namespace.yaml (後続タスク) と controller-rbac.yaml のスコープもここを参照する。
+# apps/devplatform 自体のリリース先ネームスペース (devplatform) とは別にする。
+# 理由: Workspace Controller / Hermes Agent 用 ServiceAccount はこのネームスペース
+# 内のリソース操作権限のみを持つ (14.1/14.2) ため、WorkspaceTemplate をその外に
+# 置くと同じ RBAC で参照できなくなる。
+workspaceNamespace: devplatform-workspaces
+
+# 既定の WorkspaceTemplate 実体 (GitOps 管理、17.4)。ベースイメージは
+# apps/devplatform/image/workspace/Dockerfile (後続タスク) が生成する不変タグに
+# 差し替えるまでの間、controller/gateway と同じプレースホルダを参照する。
+# database.clusterRef / auth.secretRef / evacuation.bucket は、いずれも本タスクの
+# 範囲外である apps/devplatform-db・Infisical Secret・Garage バケットの各後続タスクが
+# 実体を用意するまでの暫定名。
+workspaceTemplate:
+  name: default
+  image: "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+  storage:
+    size: 20Gi
+  nodeName: k3s-agent-z440
+  priorityClassName: devplatform-workspace
+  database:
+    clusterRef: devplatform-db
+  auth:
+    secretRef: devplatform-workspace-claude-auth
+  evacuation:
+    bucket: workspace
+
+# ワークスペース専用ネームスペースへの ResourceQuota (15.5)。既定値は保守的な小さめの値
+# (ワークスペース数個 + テスト実行分を想定) であり、クラスタの実容量見積もり (本 spec の
+# 範囲外) を踏まえて運用者が配備時に上書きする前提。workspace-quota.yaml が参照する。
+workspaceQuota:
+  maxPods: "5"
+  requestsCpu: "2"
+  requestsMemory: "4Gi"
+  limitsCpu: "4"
+  limitsMemory: "8Gi"
+
+# 秘匿情報の同期定義 (14.4/14.5)。projectId/environmentSlug/secretPath/authRef は
+# 他 Helm chart (apps/garage 等) と同じ全アプリ共通の Infisical プロジェクトを指し、
+# この 1 箇所にのみ実体を置く。infisical-secret.yaml が参照する。
+infisical:
+  projectId: "59f7eabf-94e5-49d0-85ed-975dfdf27f11"
+  environmentSlug: prod
+  secretPath: "/"
+  authRef:
+    name: infisical-machine-identity
+    namespace: infisical-operator
+  # 推論バックエンドの資格情報 (Hermes Agent 相当の推論呼び出しに用いる、Claude Code の
+  # サブスクリプション認証とは別系統の API キー。9.2 で実際に消費するコンポーネントが
+  # 実装されるまでの間、参照定義のみを先行して用意する)。
+  inferenceCredentialsSecretName: devplatform-inference-credentials
+  # devplatform-db (CNPG superuser) の資格情報を、apps/devplatform-db が Infisical から
+  # 同期する Secret とは別に、Workspace Controller と同じネームスペース (devplatform) にも
+  # 複製する。Kubernetes Secret はネームスペース境界を越えて参照できないため、Controller が
+  # 疎通確認等で直接必要とする場合に備えて同一の Infisical キーをここでも同期する。
+  dbCredentialsSecretName: devplatform-db-credentials
+
+# ワークスペース用ベースイメージ (apps/devplatform/image/workspace/Dockerfile, 15.1-15.3)。
+# image-prestage-daemonset.yaml が全ノードへの事前配置に、workspaceTemplate.image
+# (上記) が実際の払い出しに、それぞれこのイメージを参照する。ビルド・push はこのリポジトリの
+# 範囲外 (CI 非稼働) のため手動運用とし、tag は日付+短縮コミットSHA等の一意値のみを使い
+# latest を使わない (15.2)。digest はビルド後に `docker inspect --format
+# '{{index .RepoDigests 0}}'` 等で取得し、可能な限りこちらを不変参照の正とする
+# (repository:tag@digest の形でイメージ参照に付与される。未設定の間は tag のみで参照する)。
+workspaceImage:
+  repository: "REPLACE_WITH_REGISTRY/devplatform-workspace"
+  tag: "REPLACE_WITH_DATE-SHORTSHA"
+  # 例: "sha256:0000000000000000000000000000000000000000000000000000000000000"
+  # 空文字列の間は tag のみで参照し、ビルド後に digest を設定してから
+  # workspaceTemplate.image もこのイメージ参照 (repository:tag@digest) に合わせて更新する。
+  digest: ""
+  # DaemonSet プレースホルダコンテナの requests/limits (15.7)。実処理を持たない sleep のみの
+  # コンテナのため最小値で足りる。
+  prestageResources:
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+    limits:
+      memory: "32Mi"

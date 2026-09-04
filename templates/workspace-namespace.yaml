@@ -1,0 +1,13 @@
+---
+# ワークスペース専用ネームスペース。ApplicationSet は apps/<dir> 1つにつき同名 namespace を
+# 1つ生成する対応を強制するため (destination.namespace が path.basename を参照する)、ワークスペース
+# 実体 (Workspace CR・StatefulSet 等) 専用の namespace を別ディレクトリとして切ると
+# ApplicationSet がそれ自体を検出してしまい、17.4 の「実体はリポジトリに存在しない」と矛盾する。
+# そのため devplatform chart のテンプレートとしてこの namespace のみを宣言し、実体は
+# Workspace Controller が実行時に生成する対象として GitOps 管理の外に置く。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.workspaceNamespace }}
+  labels:
+    app.kubernetes.io/part-of: devplatform

@@ -1,0 +1,50 @@
+# プレースホルダ実装。design.md の Workspace Controller (Workspace 調停・タスクディスパッチ・
+# Blackboard の 3 調停ループ) 本体は後続タスクで実装する。ここでは配置規約
+# (requests/limits・nodeSelector・永続データの宣言先) のみを確立する。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devplatform-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: devplatform-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: devplatform-controller
+  template:
+    metadata:
+      labels:
+        app: devplatform-controller
+    spec:
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
+          command:
+            {{- toYaml .Values.controller.command | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+          {{- if .Values.controller.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/devplatform
+          {{- end }}
+      {{- if .Values.controller.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.controller.persistence.name }}
+      {{- end }}

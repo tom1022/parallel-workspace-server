@@ -1,0 +1,177 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workspaces.devplatform.fickledev.com
+  annotations:
+    # 全 Application が一律 prune/selfHeal のため、この注釈が CRD を誤削除から守る
+    # 唯一の防御 (要件 17.5)。CRD が消えると実行中の Workspace 実体が読めなくなり、
+    # Finalizer による退避完了確認前の削除処理も継続できなくなる。
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  group: devplatform.fickledev.com
+  scope: Namespaced
+  names:
+    kind: Workspace
+    listKind: WorkspaceList
+    plural: workspaces
+    singular: workspace
+    shortNames:
+      - ws
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Branch
+          type: string
+          jsonPath: .spec.branch
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: |
+            実行時に Workspace Controller が生成する運用物 (design.md 231行)。
+            リポジトリにはこの CRD 定義のみを置き、実体はマニフェスト化しない (17.4)。
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - repository
+                - branch
+                - templateRef
+              properties:
+                repository:
+                  type: string
+                  description: 対象リポジトリ。
+                  minLength: 1
+                branch:
+                  type: string
+                  description: 対象ブランチ。
+                  minLength: 1
+                baseBranch:
+                  type: string
+                  description: 対象ブランチがリモートに存在しない場合の派生元 (1.5)。
+                  nullable: true
+                templateRef:
+                  type: string
+                  description: 参照する WorkspaceTemplate の名前。
+                  minLength: 1
+                desiredPhase:
+                  type: string
+                  description: 開発者/Hermes Agent が要求する目標状態。中断は Suspended への変更で要求する (13.1-13.4)。
+                  enum:
+                    - Ready
+                    - Suspended
+                  default: Ready
+            status:
+              type: object
+              description: Workspace Controller のみが書き込む (単一書き手の原則)。
+              properties:
+                phase:
+                  type: string
+                  description: 状態機械の現在値 (Provisioning/Ready/Suspended/Failed/Terminating)。
+                  enum:
+                    - Provisioning
+                    - Ready
+                    - Suspended
+                    - Failed
+                    - Terminating
+                  default: Provisioning
+                workspaceId:
+                  type: string
+                  description: ワークスペース識別子 (1.7)。
+                urls:
+                  type: object
+                  properties:
+                    preview:
+                      type: string
+                      description: アプリケーションプレビュー URL。
+                    session:
+                      type: string
+                      description: 実行セッションへの接続先 URL (1.7)。
+                    report:
+                      type: string
+                      description: テストレポート閲覧 URL。
+                sessionId:
+                  type: string
+                  description: 実行セッション識別子 (1.7)。
+                lastActivityAt:
+                  type: string
+                  format: date-time
+                  description: アイドル判定の基準時刻 (4.8/13.1)。
+                lastEvacuation:
+                  type: object
+                  description: 直近の退避スナップショット (EvacuationSnapshot)。
+                  properties:
+                    workspaceId:
+                      type: string
+                    branch:
+                      type: string
+                    headCommit:
+                      type: string
+                    bundleKey:
+                      type: string
+                    dirtyArchiveKey:
+                      type: string
+                    capturedAt:
+                      type: string
+                      format: date-time
+                    sizeBytes:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                blackboard:
+                  type: object
+                  description: 当該ブランチの Blackboard エントリ (BlackboardEntry)。
+                  properties:
+                    branch:
+                      type: string
+                    summary:
+                      type: string
+                    changedFiles:
+                      type: array
+                      items:
+                        type: string
+                    publicInterfaces:
+                      type: array
+                      items:
+                        type: string
+                    active:
+                      type: boolean
+                    updatedAt:
+                      type: string
+                      format: date-time
+                conditions:
+                  type: array
+                  description: 付帯リソースごとの状態と失敗理由 (1.8)。
+                  default: []
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

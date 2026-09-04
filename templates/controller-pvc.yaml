@@ -1,0 +1,20 @@
+{{- if .Values.controller.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.controller.persistence.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: devplatform-controller
+  annotations:
+    # apps/kanidm の data PVC と同じ理由づけ: 全 Application 一律の prune/selfHeal から
+    # 制御プレーンの永続データを守る唯一の防御 (要件 17.5 と同様の削除保護)。
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.controller.persistence.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.controller.persistence.size }}
+{{- end }}

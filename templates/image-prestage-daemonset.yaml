@@ -1,0 +1,56 @@
+---
+# ワークスペース用ベースイメージの全ノード事前配置 (15.3)。
+#
+# コンテナは対象イメージを参照するだけの軽量プレースホルダで、実処理は持たない。
+# Pod が Running/Ready になること自体が「kubelet がそのノードへイメージを pull 済み」を
+# 意味する (Kubernetes は Pod 起動前にコンテナイメージを pull する) ため、kubelet の
+# イメージキャッシュをそのまま事前配置の実現手段として利用する。
+#
+# 全ノード対象 (15.3 は「全ノード」を要求する): nodeSelector は設定せず、master/control-plane
+# taint も tolerations で許容し文字通り全ノードにスケジュールする。一方でワークスペースの
+# 配置先は k3s-agent-z440 に固定されている (§ワークスペースの配置ノード) ため、払い出しの
+# 前提条件 (15.4) は「配置先ノードでの配置完了」のみを見ればよく、それ以外のノードでの
+# 配置未完了が払い出しを妨げてはならない。この判定は後続タスク (2.5) が
+# `Node.status.images[].names` (Kubernetes API 標準フィールド) を配置先ノードについてのみ
+# 参照する形で行う。DaemonSet がその配置先ノードで Running になれば、当該ノードの
+# `Node.status.images` に本イメージが自然に現れるため、本タスクではカスタムラベル等の
+# 追加の伝搬機構を作らない。
+#
+# 配置完了の集約シグナルは `status.numberReady == status.desiredNumberScheduled`
+# (Kubernetes API 標準の DaemonSetStatus) とし、専用の Condition は設けない。
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: devplatform-image-prestage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: devplatform-image-prestage
+spec:
+  selector:
+    matchLabels:
+      app: devplatform-image-prestage
+  template:
+    metadata:
+      labels:
+        app: devplatform-image-prestage
+        # ノードの pull 済みイメージバージョンを Pod ラベルからも人手で確認できるようにする
+        # 補助情報。判定ロジック (2.5) はこのラベルではなく Node.status.images を参照する。
+        devplatform.fickledev.com/workspace-image-version: {{ .Values.workspaceImage.tag | quote }}
+    spec:
+      # 全ノードへ配置するため、control-plane を含むあらゆる taint を許容する。
+      tolerations:
+        - operator: Exists
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prestage
+          image: "{{ .Values.workspaceImage.repository }}:{{ .Values.workspaceImage.tag }}{{ if .Values.workspaceImage.digest }}@{{ .Values.workspaceImage.digest }}{{ end }}"
+          command: ["sleep", "infinity"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            {{- toYaml .Values.workspaceImage.prestageResources | nindent 12 }}

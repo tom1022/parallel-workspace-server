@@ -1,0 +1,33 @@
+# 既定の WorkspaceTemplate 実体。GitOps 管理下に置き (17.4)、実行時に払い出される
+# Workspace 自体はここに含めない (design.md 231行、17.4)。
+apiVersion: devplatform.fickledev.com/v1alpha1
+kind: WorkspaceTemplate
+metadata:
+  name: {{ .Values.workspaceTemplate.name }}
+  namespace: {{ .Values.workspaceNamespace }}
+  labels:
+    app.kubernetes.io/name: devplatform-workspacetemplate
+  annotations:
+    # WorkspaceTemplate が誤って prune/削除されると、参照中の Workspace が
+    # 払い出しテンプレートを失い再調停できなくなる。CRD 本体と同じ理由で保護する
+    # (要件 17.5 の実効的な適用範囲として、テンプレート実体にも付与する)。
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  image: {{ .Values.workspaceTemplate.image | quote }}
+  resources:
+    requests:
+      cpu: {{ .Values.workspaceTemplate.resources.requests.cpu | quote }}
+      memory: {{ .Values.workspaceTemplate.resources.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.workspaceTemplate.resources.limits.cpu | quote }}
+      memory: {{ .Values.workspaceTemplate.resources.limits.memory | quote }}
+  storage:
+    size: {{ .Values.workspaceTemplate.storage.size | quote }}
+  nodeName: {{ .Values.workspaceTemplate.nodeName }}
+  priorityClassName: {{ .Values.workspaceTemplate.priorityClassName }}
+  database:
+    clusterRef: {{ .Values.workspaceTemplate.database.clusterRef }}
+  auth:
+    secretRef: {{ .Values.workspaceTemplate.auth.secretRef }}
+  evacuation:
+    bucket: {{ .Values.workspaceTemplate.evacuation.bucket }}

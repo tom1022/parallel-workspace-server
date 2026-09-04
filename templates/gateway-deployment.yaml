@@ -1,0 +1,38 @@
+# プレースホルダ実装。design.md の Terminal Gateway (ホスト名からワークスペースを解決し
+# 実行セッションへ到達させる共有端末ゲートウェイ) 本体は後続タスク (6.1) で実装する。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devplatform-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: devplatform-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: devplatform-gateway
+  template:
+    metadata:
+      labels:
+        app: devplatform-gateway
+    spec:
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          command:
+            {{- toYaml .Values.gateway.command | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
