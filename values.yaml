@@ -2,18 +2,22 @@
 # Workspace Controller (制御プレーン)。design.md の Control Plane は状態ストアを
 # Kubernetes API のみに置き独自データベースを持たないため、persistence は
 # 既定で無効。将来ローカルキャッシュ等が必要になった場合の宣言先として用意する。
+#
+# イメージは apps/devplatform/controller/Dockerfile (Go + controller-runtime、
+# distroless base) が生成する。ビルド・push はこのリポジトリの範囲外 (CI 非稼働)
+# のため手動運用とし、workspaceImage と同じ規約 (tag は日付+短縮コミットSHA、
+# digest は取得でき次第 repository:tag@digest の形で不変参照に切り替える) に従う。
 controller:
   image:
-    repository: busybox
-    tag: "1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
-  # 実コンテナは後続タスクで実装する。プレースホルダとして起動し続けるだけ。
-  command: ["sleep", "infinity"]
+    repository: "REPLACE_WITH_REGISTRY/devplatform-controller"
+    tag: "REPLACE_WITH_DATE-SHORTSHA"
+  command: ["/controller"]
   resources:
     requests:
-      cpu: "10m"
+      cpu: "20m"
       memory: "64Mi"
     limits:
-      memory: "64Mi"
+      memory: "128Mi"
   # ワークスペースの配置ノード (k3s-agent-z440、apps/garage と同一) に固定し、
   # 制御プレーンとワークスペース間のノード外ネットワーク越しレイテンシを避ける。
   nodeSelector:
@@ -66,6 +70,9 @@ workspaceTemplate:
       memory: "4Gi"
   storage:
     size: 20Gi
+    # nodeName の全ワークスペース合計に対するディスク予算 (15.11)。既定の workspaceQuota.maxPods
+    # (5) x size (20Gi) を賄える値。実測ではなく宣言値 (size) 合計での近似判定。
+    nodeDiskBudget: 100Gi
   nodeName: k3s-agent-z440
   priorityClassName: devplatform-workspace
   database:

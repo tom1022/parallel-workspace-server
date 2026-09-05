@@ -23,6 +23,7 @@ spec:
       memory: {{ .Values.workspaceTemplate.resources.limits.memory | quote }}
   storage:
     size: {{ .Values.workspaceTemplate.storage.size | quote }}
+    nodeDiskBudget: {{ .Values.workspaceTemplate.storage.nodeDiskBudget | quote }}
   nodeName: {{ .Values.workspaceTemplate.nodeName }}
   priorityClassName: {{ .Values.workspaceTemplate.priorityClassName }}
   database:

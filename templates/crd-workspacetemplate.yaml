@@ -88,6 +88,13 @@ spec:
                       type: string
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
                       default: 20Gi
+                    nodeDiskBudget:
+                      type: string
+                      description: |
+                        この nodeName へ配置された全ワークスペースの作業ディレクトリ容量 (size) 合計に対する上限
+                        (15.11)。実測ディスク使用量ではなく宣言値の合計による近似。空文字は上限なしを意味する。
+                      pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
+                      default: 100Gi
                 nodeName:
                   type: string
                   description: |

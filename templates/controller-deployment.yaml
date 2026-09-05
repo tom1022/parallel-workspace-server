@@ -1,6 +1,6 @@
-# プレースホルダ実装。design.md の Workspace Controller (Workspace 調停・タスクディスパッチ・
-# Blackboard の 3 調停ループ) 本体は後続タスクで実装する。ここでは配置規約
-# (requests/limits・nodeSelector・永続データの宣言先) のみを確立する。
+# Workspace Controller (design.md の 3 調停ループのうち、タスク 2.1 で実装した
+# Workspace 調停ループ本体)。タスクディスパッチ・Blackboard の 2 ループは後続タスクで
+# 同じ Deployment 内の Manager へ追加する。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +18,9 @@ spec:
       labels:
         app: devplatform-controller
     spec:
+      # controller-rbac.yaml binds this SA's Role to workspaceNamespace only
+      # (14.1/14.2); WORKSPACE_NAMESPACE above additionally scopes the cache.
+      serviceAccountName: devplatform-workspace-operator
       {{- with .Values.controller.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -30,6 +33,12 @@ spec:
           image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
           command:
             {{- toYaml .Values.controller.command | nindent 12 }}
+          env:
+            # Bounds the Manager's cache/client to this one namespace so the
+            # controller has no way to observe or touch resources outside it
+            # (14.1/14.2), independent of what its RBAC Role additionally allows.
+            - name: WORKSPACE_NAMESPACE
+              value: {{ .Values.workspaceNamespace | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
