@@ -1,12 +1,21 @@
 # ワークスペース用ベースイメージ (design.md Platform Manifests / 15.1, 15.2)。
 #
-# ビルド・push はこのリポジトリの範囲外 (CI 非稼働の Gitea リモートのため手動運用):
-#   docker build -t <registry>/<repo>/workspace:$(date +%Y%m%d)-$(git rev-parse --short HEAD) \
-#     apps/devplatform/image/workspace
+# ビルド・push はこのリポジトリの範囲外 (CI 非稼働の Gitea リモートのため手動運用)。
+# ビルドコンテキストは apps/devplatform: Session Supervisor を supervisor/ から
+# ビルドするため、image/workspace ではコンテキストが足りない。
+#   docker build -f apps/devplatform/image/workspace/Dockerfile \
+#     -t <registry>/<repo>/workspace:$(date +%Y%m%d)-$(git rev-parse --short HEAD) \
+#     apps/devplatform
 #   docker push <registry>/<repo>/workspace:<same tag>
 #   docker inspect --format '{{index .RepoDigests 0}}' <registry>/<repo>/workspace:<same tag>
 # 得られた digest を values.yaml の workspaceImage.digest / workspaceTemplate.image へ設定する。
 # タグは日付+短縮コミットSHAの組み合わせのみを使い、latest 等の可変タグは push しない (15.2)。
+
+FROM golang:1.26-alpine AS supervisor-build
+WORKDIR /src
+COPY supervisor/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/supervisor ./cmd/supervisor
+
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -48,5 +57,9 @@ RUN npx --yes playwright install --with-deps chromium
 # 側で `args: (process.env.DEVPLATFORM_CHROMIUM_ARGS ?? "").split(" ")` のように読み取ることを
 # 規約とする。
 ENV DEVPLATFORM_CHROMIUM_ARGS="--disable-dev-shm-usage"
+
+# 配置先パスは controller の resources.go (supervisorBinaryPath) が Pod の
+# entrypoint として直接指定するため、両者を一致させる必要がある。
+COPY --from=supervisor-build /out/supervisor /usr/local/bin/supervisor
 
 WORKDIR /workspace

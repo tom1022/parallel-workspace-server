@@ -75,6 +75,9 @@ workspaceTemplate:
     nodeDiskBudget: 100Gi
   nodeName: k3s-agent-z440
   priorityClassName: devplatform-workspace
+  # 各ワークスペースの既定モデル (7.3)。空文字の間は Claude Code 自身の既定モデルを用いる。
+  # 設定するとワークスペース Pod へ ANTHROPIC_MODEL として渡る。
+  model: ""
   database:
     clusterRef: devplatform-db
   auth:

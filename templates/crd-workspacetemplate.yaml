@@ -105,6 +105,11 @@ spec:
                   type: string
                   description: 既存アプリより低い優先度クラス。ノード逼迫時にワークスペース側を先に退避対象とする (15.10)。
                   default: devplatform-workspace
+                model:
+                  type: string
+                  description: |
+                    このテンプレートから払い出すワークスペースの既定モデル (7.3)。空の場合は
+                    Claude Code 自身の既定モデルをそのまま用いる。
                 database:
                   type: object
                   required:

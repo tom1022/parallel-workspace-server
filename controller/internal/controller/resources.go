@@ -12,19 +12,39 @@ import (
 )
 
 const (
-	// workingDirMountPath is where the branch's git working directory (and, by
-	// extension, the CLAUDE_CONFIG_DIR below it) lives inside the workspace PVC.
-	workingDirMountPath = "/workspace"
+	// workspaceMountPath is where the workspace PVC is mounted. The layout
+	// below it is fixed and identical in every workspace: the checkout path
+	// reaches Claude Code's system prompt, and the prompt cache is only reused
+	// across workspaces when that prefix matches byte for byte (7.13, 7.14).
+	workspaceMountPath = "/workspace"
 
-	// claudeConfigDirName keeps Claude Code's config area under the per-workspace
-	// PVC so it stays independent per workspace and survives restarts (5.3),
-	// distinct from the read-only mounted long-lived credential in authMountPath.
-	claudeConfigDirName  = ".claude-config"
+	// workingDirPath is the branch's git checkout. It is a subdirectory rather
+	// than the mount root because the config area, the session output log and
+	// the package cache all have to live on the same volume (5.3, 15.12) — at
+	// the root they would sit inside the git tree as untracked files, where a
+	// `git add -A` in the session would commit the credential.
+	workingDirPath = workspaceMountPath + "/repo"
+
+	// claudeConfigPath keeps Claude Code's config area on the per-workspace PVC
+	// so it stays independent per workspace and survives restarts (5.3),
+	// distinct from the read-only mounted long-lived credential in
+	// authMountPath. cacheDirPath is the package cache the supervisor points
+	// every package manager at, so a suspend/resume does not re-download
+	// (15.12). Both mirror session.Paths in the supervisor module.
+	claudeConfigPath = workspaceMountPath + "/.claude-config"
+	cacheDirPath     = workspaceMountPath + "/.cache"
+
 	authMountPath        = "/run/devplatform/claude-auth"
 	authSecretVolumeName = "claude-auth"
 	workspaceVolumeName  = "workspace"
 
 	labelWorkspaceName = "devplatform.fickledev.com/workspace"
+
+	// supervisorBinaryPath and supervisorPort must match the workspace base
+	// image (apps/devplatform/image/workspace/Dockerfile) and the Session
+	// Supervisor's own default listen address.
+	supervisorBinaryPath = "/usr/local/bin/supervisor"
+	supervisorPort       = 8787
 
 	localPathStorageClass = "local-path"
 
@@ -95,6 +115,7 @@ func parseResourceList(rl devplatformv1alpha1.ResourceList) (corev1.ResourceList
 // next git operation in this same script would otherwise fail against it
 // (16.5).
 const workspaceInitScript = `set -eu
+mkdir -p "$WORKSPACE_DIR" "$CLAUDE_CONFIG_DIR" "$WORKSPACE_CACHE_DIR"
 rm -f "$WORKSPACE_DIR/.git/index.lock" "$WORKSPACE_DIR/.git/HEAD.lock" "$WORKSPACE_DIR/.git/shallow.lock"
 if [ ! -d "$WORKSPACE_DIR/.git" ]; then
   if git ls-remote --exit-code --heads "$WORKSPACE_REPOSITORY" "$WORKSPACE_BRANCH" >/dev/null 2>&1; then
@@ -104,7 +125,6 @@ if [ ! -d "$WORKSPACE_DIR/.git" ]; then
     git -C "$WORKSPACE_DIR" checkout -b "$WORKSPACE_BRANCH"
   fi
 fi
-mkdir -p "$CLAUDE_CONFIG_DIR"
 rm -f "$CLAUDE_CONFIG_DIR/.credentials.json"
 `
 
@@ -124,14 +144,27 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 	}
 
 	labels := workspaceLabels(ws)
-	claudeConfigDir := workingDirMountPath + "/" + claudeConfigDirName
 
 	initEnv := []corev1.EnvVar{
-		{Name: "WORKSPACE_DIR", Value: workingDirMountPath},
+		{Name: "WORKSPACE_DIR", Value: workingDirPath},
 		{Name: "WORKSPACE_REPOSITORY", Value: ws.Spec.Repository},
 		{Name: "WORKSPACE_BRANCH", Value: ws.Spec.Branch},
 		{Name: "WORKSPACE_BASE_BRANCH", Value: baseBranch},
-		{Name: "CLAUDE_CONFIG_DIR", Value: claudeConfigDir},
+		{Name: "CLAUDE_CONFIG_DIR", Value: claudeConfigPath},
+		{Name: "WORKSPACE_CACHE_DIR", Value: cacheDirPath},
+	}
+
+	// The supervisor derives the rest of the layout from the mount root, so a
+	// path change stays in one place.
+	workspaceEnv := []corev1.EnvVar{
+		{Name: "WORKSPACE_MOUNT", Value: workspaceMountPath},
+		{Name: "WORKSPACE_NAME", Value: ws.Name},
+		{Name: "CLAUDE_AUTH_FILE", Value: authMountPath + "/credentials.json"},
+	}
+	// Left unset when the template does not pin one, so Claude Code applies its
+	// own default rather than this controller inventing a model name (7.3).
+	if tmpl.Spec.Model != "" {
+		workspaceEnv = append(workspaceEnv, corev1.EnvVar{Name: "ANTHROPIC_MODEL", Value: tmpl.Spec.Model})
 	}
 
 	volumes := []corev1.Volume{
@@ -149,7 +182,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		},
 	}
 	volumeMounts := []corev1.VolumeMount{
-		{Name: workspaceVolumeName, MountPath: workingDirMountPath},
+		{Name: workspaceVolumeName, MountPath: workspaceMountPath},
 		{Name: authSecretVolumeName, MountPath: authMountPath, ReadOnly: true},
 	}
 
@@ -182,13 +215,12 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 					},
 					Containers: []corev1.Container{
 						{
-							// Placeholder entrypoint: Session Supervisor (task 3) replaces this
-							// with the resident Claude Code session process.
 							Name:    "workspace",
 							Image:   tmpl.Spec.Image,
-							Command: []string{"sleep", "infinity"},
-							Env: []corev1.EnvVar{
-								{Name: "CLAUDE_CONFIG_DIR", Value: claudeConfigDir},
+							Command: []string{supervisorBinaryPath},
+							Env:     workspaceEnv,
+							Ports: []corev1.ContainerPort{
+								{Name: "supervisor", ContainerPort: supervisorPort},
 							},
 							Resources: corev1.ResourceRequirements{
 								Requests: requests,

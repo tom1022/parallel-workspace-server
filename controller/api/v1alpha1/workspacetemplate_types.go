@@ -88,6 +88,11 @@ type WorkspaceTemplateSpec struct {
 	// +optional
 	PriorityClassName string `json:"priorityClassName,omitempty"`
 
+	// Model is the default model workspaces provisioned from this template use
+	// (7.3). Empty leaves Claude Code's own default in effect.
+	// +optional
+	Model string `json:"model,omitempty"`
+
 	Database WorkspaceDatabaseRef `json:"database"`
 
 	Auth WorkspaceAuthRef `json:"auth"`

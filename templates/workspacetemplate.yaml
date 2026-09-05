@@ -26,6 +26,9 @@ spec:
     nodeDiskBudget: {{ .Values.workspaceTemplate.storage.nodeDiskBudget | quote }}
   nodeName: {{ .Values.workspaceTemplate.nodeName }}
   priorityClassName: {{ .Values.workspaceTemplate.priorityClassName }}
+{{- with .Values.workspaceTemplate.model }}
+  model: {{ . | quote }}
+{{- end }}
   database:
     clusterRef: {{ .Values.workspaceTemplate.database.clusterRef }}
   auth:
