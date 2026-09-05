@@ -48,6 +48,17 @@ const (
 
 	localPathStorageClass = "local-path"
 
+	// garageS3Endpoint is the in-cluster S3 API of apps/garage. Like the
+	// Traefik/cert-manager facts in ingress_reconciler.go it is a property of
+	// this cluster rather than of a template, so it is pinned here instead of
+	// widening the WorkspaceTemplate schema.
+	garageS3Endpoint = "http://garage.garage.svc.cluster.local:3900"
+	garageS3Region   = "garage"
+
+	// Key names inside the evacuation destination's credential Secret.
+	evacuationAccessKeyKey = "access-key"
+	evacuationSecretKeyKey = "secret-key"
+
 	defaultWorkspaceStorageSize = "20Gi"
 )
 
@@ -114,6 +125,11 @@ func parseResourceList(rl devplatformv1alpha1.ResourceList) (corev1.ResourceList
 // a stale git lock from a killed clone/checkout can be cleared before the
 // next git operation in this same script would otherwise fail against it
 // (16.5).
+//
+// The restore sits inside the fresh-clone branch: an empty PVC is what node
+// loss looks like from here, and it is the only state where replaying the last
+// evacuation cannot overwrite newer work (16.9). The supervisor refuses the
+// replay a second time on its own, so the two guards agree.
 const workspaceInitScript = `set -eu
 mkdir -p "$WORKSPACE_DIR" "$CLAUDE_CONFIG_DIR" "$WORKSPACE_CACHE_DIR"
 rm -f "$WORKSPACE_DIR/.git/index.lock" "$WORKSPACE_DIR/.git/HEAD.lock" "$WORKSPACE_DIR/.git/shallow.lock"
@@ -124,6 +140,7 @@ if [ ! -d "$WORKSPACE_DIR/.git" ]; then
     git clone --branch "$WORKSPACE_BASE_BRANCH" --single-branch "$WORKSPACE_REPOSITORY" "$WORKSPACE_DIR"
     git -C "$WORKSPACE_DIR" checkout -b "$WORKSPACE_BRANCH"
   fi
+  ` + supervisorBinaryPath + ` restore
 fi
 rm -f "$CLAUDE_CONFIG_DIR/.credentials.json"
 `
@@ -145,22 +162,38 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 
 	labels := workspaceLabels(ws)
 
-	initEnv := []corev1.EnvVar{
+	// The supervisor evacuates on its own after every turn and on request
+	// before a stop (16.7/16.8) and replays the last snapshot from the init
+	// container after node loss (16.9), so both containers address the same
+	// destination. The credentials arrive by Secret reference rather than
+	// value: the controller never reads them and they must not appear in the
+	// Pod spec.
+	evacuationEnv := []corev1.EnvVar{
+		{Name: "WORKSPACE_ID", Value: resourceName},
+		{Name: "EVACUATION_ENDPOINT", Value: garageS3Endpoint},
+		{Name: "EVACUATION_REGION", Value: garageS3Region},
+		{Name: "EVACUATION_BUCKET", Value: tmpl.Spec.Evacuation.Bucket},
+		secretEnv("EVACUATION_ACCESS_KEY", tmpl.Spec.Evacuation.SecretRef, evacuationAccessKeyKey),
+		secretEnv("EVACUATION_SECRET_KEY", tmpl.Spec.Evacuation.SecretRef, evacuationSecretKeyKey),
+	}
+
+	initEnv := append([]corev1.EnvVar{
 		{Name: "WORKSPACE_DIR", Value: workingDirPath},
 		{Name: "WORKSPACE_REPOSITORY", Value: ws.Spec.Repository},
 		{Name: "WORKSPACE_BRANCH", Value: ws.Spec.Branch},
 		{Name: "WORKSPACE_BASE_BRANCH", Value: baseBranch},
 		{Name: "CLAUDE_CONFIG_DIR", Value: claudeConfigPath},
 		{Name: "WORKSPACE_CACHE_DIR", Value: cacheDirPath},
-	}
+	}, evacuationEnv...)
 
 	// The supervisor derives the rest of the layout from the mount root, so a
 	// path change stays in one place.
-	workspaceEnv := []corev1.EnvVar{
+	workspaceEnv := append([]corev1.EnvVar{
 		{Name: "WORKSPACE_MOUNT", Value: workspaceMountPath},
 		{Name: "WORKSPACE_NAME", Value: ws.Name},
 		{Name: "CLAUDE_AUTH_FILE", Value: authMountPath + "/credentials.json"},
-	}
+	}, evacuationEnv...)
+
 	// Left unset when the template does not pin one, so Claude Code applies its
 	// own default rather than this controller inventing a model name (7.3).
 	if tmpl.Spec.Model != "" {
@@ -235,4 +268,16 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		},
 	}
 	return sts, nil
+}
+
+func secretEnv(name, secretName, key string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: name,
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+				Key:                  key,
+			},
+		},
+	}
 }

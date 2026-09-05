@@ -35,3 +35,4 @@ spec:
     secretRef: {{ .Values.workspaceTemplate.auth.secretRef }}
   evacuation:
     bucket: {{ .Values.workspaceTemplate.evacuation.bucket }}
+    secretRef: {{ .Values.workspaceTemplate.evacuation.secretRef }}

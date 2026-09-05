@@ -11,6 +11,11 @@ import (
 	"fmt"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
@@ -25,6 +30,15 @@ const (
 	// evacuationPollInterval paces the Terminating requeue loop while
 	// evacuation is still in flight.
 	evacuationPollInterval = 10 * time.Second
+
+	// conditionEvacuated carries the reason a stop was refused, so an
+	// unreachable destination is visible on the object rather than only in the
+	// notification stream.
+	conditionEvacuated = "Evacuated"
+
+	// EventEvacuationFailed is the notification kind reported when a workspace
+	// cannot be stopped because its working directory could not be captured.
+	EventEvacuationFailed = "EvacuationFailed"
 )
 
 // EvacuationConfirmer is the boundary to the Evacuation Agent's off-node
@@ -61,4 +75,67 @@ func (r *WorkspaceReconciler) removeEvacuationFinalizer(ctx context.Context, ws 
 		return nil
 	}
 	return r.Update(ctx, ws)
+}
+
+// evacuateBeforeStop captures ws's working directory off-node while the Pod
+// that holds it is still running, recording the snapshot on ws.Status. It
+// reports whether it is safe to stop compute.
+//
+// A workspace with no running compute has nothing left to capture, so it is
+// reported safe rather than blocked: waiting on a Pod that will never answer
+// would strand every already-suspended workspace at destroy time.
+//
+// ponytail: a workspace destroyed before it ever evacuated successfully keeps
+// evacuationFinalizer, because StatusEvacuationConfirmer has no snapshot to
+// confirm; an operator has to remove the finalizer by hand. Recording an
+// explicit "nothing was ever written" marker on status is the upgrade path if
+// that turns up in practice.
+func (r *WorkspaceReconciler) evacuateBeforeStop(ctx context.Context, ws *devplatformv1alpha1.Workspace, resourceName string) (bool, error) {
+	if resourceName == "" {
+		return true, nil
+	}
+	running, err := r.computeRunning(ctx, ws.Namespace, resourceName)
+	if err != nil || !running {
+		return true, err
+	}
+	if r.EvacuationRequester == nil {
+		return false, fmt.Errorf("devplatform: no EvacuationRequester configured")
+	}
+
+	snapshot, err := r.EvacuationRequester.RequestEvacuation(ctx, ws)
+	if err != nil {
+		meta.SetStatusCondition(&ws.Status.Conditions, metav1.Condition{
+			Type:    conditionEvacuated,
+			Status:  metav1.ConditionFalse,
+			Reason:  "EvacuationFailed",
+			Message: err.Error(),
+		})
+		r.notify(ctx, ws, EventEvacuationFailed, err.Error())
+		return false, r.Status().Update(ctx, ws)
+	}
+
+	ws.Status.LastEvacuation = snapshot
+	meta.SetStatusCondition(&ws.Status.Conditions, metav1.Condition{
+		Type:    conditionEvacuated,
+		Status:  metav1.ConditionTrue,
+		Reason:  "SnapshotCaptured",
+		Message: "working directory captured to " + snapshot.BundleKey,
+	})
+	// Persisted here rather than by the caller: once compute is torn down
+	// nothing can be re-evacuated, so a retry that re-read the Workspace from
+	// the API server must still find this snapshot.
+	return true, r.Status().Update(ctx, ws)
+}
+
+// computeRunning reports whether the workspace's StatefulSet currently has a
+// ready replica, which is the only state a supervisor can answer from.
+func (r *WorkspaceReconciler) computeRunning(ctx context.Context, namespace, resourceName string) (bool, error) {
+	var sts appsv1.StatefulSet
+	if err := r.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: namespace}, &sts); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return sts.Status.ReadyReplicas >= 1, nil
 }

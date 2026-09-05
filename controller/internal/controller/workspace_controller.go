@@ -74,6 +74,24 @@ type WorkspaceReconciler struct {
 	// default: reconcileTerminating fails explicitly rather than deleting a
 	// PVC it never confirmed was evacuated (see evacuation.go).
 	EvacuationConfirmer EvacuationConfirmer
+
+	// EvacuationRequester asks the workspace's Session Supervisor to capture
+	// the working directory before compute is stopped or torn down (16.8). No
+	// default, for the same reason as EvacuationConfirmer: a missing requester
+	// must not read as "nothing to evacuate".
+	EvacuationRequester EvacuationRequester
+
+	// Notify reports a condition a human has to act on. Unset is a no-op:
+	// chat relay is the platform's only notification path and losing it must
+	// not take reconciliation down with it.
+	Notify func(ctx context.Context, ws *devplatformv1alpha1.Workspace, kind, detail string)
+}
+
+func (r *WorkspaceReconciler) notify(ctx context.Context, ws *devplatformv1alpha1.Workspace, kind, detail string) {
+	if r.Notify == nil {
+		return
+	}
+	r.Notify(ctx, ws, kind, detail)
 }
 
 func (r *WorkspaceReconciler) nodeReader() client.Reader {

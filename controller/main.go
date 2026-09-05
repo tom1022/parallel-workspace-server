@@ -54,6 +54,12 @@ func main() {
 		// workspaceNamespace only; the image pre-stage check (15.4) needs an
 		// uncached, direct read instead.
 		NodeReader: mgr.GetAPIReader(),
+		// The evacuation itself runs inside the workspace Pod, which is the
+		// only place holding the working directory and the object store
+		// credentials; this side only asks for it and records the result.
+		EvacuationRequester: &controller.SupervisorEvacuationRequester{Client: mgr.GetClient()},
+		EvacuationConfirmer: controller.StatusEvacuationConfirmer{},
+		Notify:              controller.HermesNotifier(os.Getenv("HERMES_NOTIFY_URL")),
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create Workspace controller")
 		os.Exit(1)

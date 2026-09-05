@@ -33,6 +33,9 @@ func newTestReconciler() *WorkspaceReconciler {
 		// confirmer; evacuation_test.go swaps this out where it is itself
 		// under test.
 		EvacuationConfirmer: &fakeEvacuationConfirmer{complete: true},
+		// Likewise: tests that are not about evacuation must not fail a
+		// suspend or destroy over an unreachable supervisor.
+		EvacuationRequester: &fakeEvacuationRequester{},
 	}
 }
 
@@ -51,7 +54,8 @@ func createTemplate(t *testing.T, ctx context.Context, ns, name string) {
 			Database: devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 			Auth:     devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
 			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{
-				Bucket: "workspace",
+				Bucket:    "workspace",
+				SecretRef: "garage-evacuation-credentials",
 			},
 		},
 	}
@@ -81,6 +85,13 @@ func ensureStagedNode(t *testing.T, ctx context.Context, nodeName, image string)
 			t.Fatalf("create Node %s: %v", nodeName, err)
 		}
 	} else if err != nil {
+		t.Fatalf("get Node %s: %v", nodeName, err)
+	}
+
+	// envtest runs no kubelet, so nothing posts the Ready condition every real
+	// Node carries. Without it the node reads as unavailable to 13.9's check.
+	setNodeReady(t, ctx, nodeName, true)
+	if err := testClient.Get(ctx, types.NamespacedName{Name: nodeName}, &node); err != nil {
 		t.Fatalf("get Node %s: %v", nodeName, err)
 	}
 

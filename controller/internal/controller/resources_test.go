@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
 )
 
@@ -169,6 +172,110 @@ func TestBuildStatefulSet_UnsetModelLeavesClaudeCodeDefault(t *testing.T) {
 	for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
 		if e.Name == "ANTHROPIC_MODEL" {
 			t.Errorf("ANTHROPIC_MODEL = %q, want it absent so Claude Code picks its own default", e.Value)
+		}
+	}
+}
+
+// 16.7: the supervisor can only evacuate if the Pod carries the destination
+// and the workspace id the object keys are built from.
+func TestBuildStatefulSet_PassesEvacuationConfigToTheWorkspace(t *testing.T) {
+	ws := &devplatformv1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "ws-evac-env", Namespace: "ns"},
+		Spec:       devplatformv1alpha1.WorkspaceSpec{Repository: "https://example.com/r.git", Branch: "feature/x", TemplateRef: "default"},
+	}
+	ws.Status.WorkspaceId = "ws-evac-env-abcd"
+	tmpl := &devplatformv1alpha1.WorkspaceTemplate{
+		Spec: devplatformv1alpha1.WorkspaceTemplateSpec{
+			Image:     "busybox",
+			Resources: devplatformv1alpha1.WorkspaceResources{Requests: devplatformv1alpha1.ResourceList{CPU: "1", Memory: "1Gi"}, Limits: devplatformv1alpha1.ResourceList{CPU: "2", Memory: "2Gi"}},
+			Auth:      devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
+			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{
+				Bucket:    "workspace",
+				SecretRef: "garage-evacuation-credentials",
+			},
+		},
+	}
+
+	sts, err := buildStatefulSet(ws, tmpl, "ws-evac-env-abcd")
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+
+	env := map[string]corev1.EnvVar{}
+	for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e
+	}
+	if got := env["WORKSPACE_ID"].Value; got != "ws-evac-env-abcd" {
+		t.Errorf("WORKSPACE_ID = %q, want the workspace id the object keys use", got)
+	}
+	if got := env["EVACUATION_BUCKET"].Value; got != "workspace" {
+		t.Errorf("EVACUATION_BUCKET = %q", got)
+	}
+	if env["EVACUATION_ENDPOINT"].Value == "" {
+		t.Error("EVACUATION_ENDPOINT is unset")
+	}
+	for _, name := range []string{"EVACUATION_ACCESS_KEY", "EVACUATION_SECRET_KEY"} {
+		src := env[name].ValueFrom
+		if src == nil || src.SecretKeyRef == nil {
+			t.Fatalf("%s must come from a Secret, not a literal value", name)
+		}
+		if src.SecretKeyRef.Name != "garage-evacuation-credentials" {
+			t.Errorf("%s secret = %q", name, src.SecretKeyRef.Name)
+		}
+		if env[name].Value != "" {
+			t.Errorf("%s carries a literal credential value", name)
+		}
+	}
+}
+
+// A replacement node starts from an empty PVC, so the clone the init script
+// performs is all the tree there is; the evacuated work has to be replayed
+// onto it before Claude Code starts (16.9). The init container therefore needs
+// the same evacuation destination the workspace container gets.
+func TestBuildStatefulSet_InitContainerRestoresEvacuatedWork(t *testing.T) {
+	ws := &devplatformv1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "ws-restore", Namespace: "ns"},
+		Spec:       devplatformv1alpha1.WorkspaceSpec{Repository: "https://example.com/r.git", Branch: "feature/x", TemplateRef: "default"},
+	}
+	ws.Status.WorkspaceId = "ws-restore-abcd"
+	tmpl := &devplatformv1alpha1.WorkspaceTemplate{
+		Spec: devplatformv1alpha1.WorkspaceTemplateSpec{
+			Image:     "busybox",
+			Resources: devplatformv1alpha1.WorkspaceResources{Requests: devplatformv1alpha1.ResourceList{CPU: "1", Memory: "1Gi"}, Limits: devplatformv1alpha1.ResourceList{CPU: "2", Memory: "2Gi"}},
+			Auth:      devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
+			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{
+				Bucket:    "workspace",
+				SecretRef: "garage-evacuation-credentials",
+			},
+		},
+	}
+
+	sts, err := buildStatefulSet(ws, tmpl, "ws-restore-abcd")
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+
+	if !strings.Contains(workspaceInitScript, supervisorBinaryPath+" restore") {
+		t.Error("the init script never replays the evacuated working directory")
+	}
+
+	env := map[string]corev1.EnvVar{}
+	for _, e := range sts.Spec.Template.Spec.InitContainers[0].Env {
+		env[e.Name] = e
+	}
+	if got := env["WORKSPACE_ID"].Value; got != "ws-restore-abcd" {
+		t.Errorf("init WORKSPACE_ID = %q", got)
+	}
+	if got := env["EVACUATION_BUCKET"].Value; got != "workspace" {
+		t.Errorf("init EVACUATION_BUCKET = %q", got)
+	}
+	if env["EVACUATION_ENDPOINT"].Value == "" {
+		t.Error("init EVACUATION_ENDPOINT is unset")
+	}
+	for _, name := range []string{"EVACUATION_ACCESS_KEY", "EVACUATION_SECRET_KEY"} {
+		src := env[name].ValueFrom
+		if src == nil || src.SecretKeyRef == nil {
+			t.Fatalf("init %s must come from a Secret", name)
 		}
 	}
 }

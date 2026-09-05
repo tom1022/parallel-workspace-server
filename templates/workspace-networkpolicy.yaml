@@ -2,10 +2,12 @@
 # ワークスペース隔離の NetworkPolicy。podSelector: {} でネームスペース内の全 Pod に適用し、
 # policyTypes に Ingress/Egress 両方を指定することで既定 deny へ切り替える (14.7/14.8)。
 #
-# ingress: 同一 namespace 内の Pod 間のみ許可する (namespaceSelector を伴わない
-# podSelector: {} は Kubernetes 標準の挙動として「同一 namespace 内」を意味する)。他
-# namespace からの到達は拒否する。開発者接続は共有ゲートウェイ経由の IngressRoute の話であり、
-# 本 NetworkPolicy の対象外 (Terminal Gateway の到達経路は別タスクで確定する)。
+# ingress: 同一 namespace 内の Pod 間に加えて、制御プレーン namespace から Session Supervisor
+# のポートへの到達のみを許可する。Workspace Controller は中断・破棄の前段で
+# POST /evacuate を呼ぶ必要があり (16.8)、これがワークスペース外から入る唯一の経路。
+# それ以外の namespace からの到達は拒否する。開発者接続は共有ゲートウェイ経由の
+# IngressRoute の話であり、本 NetworkPolicy の対象外 (Terminal Gateway の到達経路は
+# 別タスクで確定する)。
 #
 # egress: 同一 namespace 内 Pod、devplatform-db namespace (ブランチ専用 DB、5432/tcp)、
 # garage namespace (退避・レポート保管先のオブジェクトストレージ、3900/tcp)、kube-system
@@ -34,6 +36,13 @@ spec:
   ingress:
     - from:
         - podSelector: {}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+      ports:
+        - protocol: TCP
+          port: 8787
   egress:
     - to:
         - podSelector: {}

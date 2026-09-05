@@ -84,6 +84,10 @@ workspaceTemplate:
     secretRef: devplatform-workspace-claude-auth
   evacuation:
     bucket: workspace
+    # 退避先 Garage の S3 資格情報。infisical-secret.yaml がワークスペース専用
+    # ネームスペースへ同期し、ワークスペース Pod が環境変数として読む。制御プレーンは
+    # 退避を依頼するだけで自ら S3 を叩かないため、この Secret を参照しない。
+    secretRef: devplatform-workspace-evacuation
 
 # ワークスペース専用ネームスペースへの ResourceQuota (15.5)。既定値は保守的な小さめの値
 # (ワークスペース数個 + テスト実行分を想定) であり、クラスタの実容量見積もり (本 spec の
@@ -114,6 +118,9 @@ infisical:
   # 複製する。Kubernetes Secret はネームスペース境界を越えて参照できないため、Controller が
   # 疎通確認等で直接必要とする場合に備えて同一の Infisical キーをここでも同期する。
   dbCredentialsSecretName: devplatform-db-credentials
+  # 退避先 Garage バケットへの S3 アクセスキー。apps/garage が作成したバケットに対する
+  # 専用キーを Infisical 側に置き、ワークスペース専用ネームスペースへ同期する。
+  evacuationCredentialsSecretName: devplatform-workspace-evacuation
 
 # ワークスペース用ベースイメージ (apps/devplatform/image/workspace/Dockerfile, 15.1-15.3)。
 # image-prestage-daemonset.yaml が全ノードへの事前配置に、workspaceTemplate.image

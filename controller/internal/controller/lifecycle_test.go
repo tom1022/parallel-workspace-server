@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,5 +314,205 @@ func TestReconcile_TerminatingDeletesSubstrateAndSetsPhase(t *testing.T) {
 	r.EvacuationConfirmer = &fakeEvacuationConfirmer{complete: true}
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
 		t.Fatalf("reconcile (terminating, cleanup): %v", err)
+	}
+}
+
+// notifyRecorder captures what the reconciler would relay to Hermes Agent.
+type notifyRecorder struct {
+	kinds   []string
+	details []string
+}
+
+func (n *notifyRecorder) record(_ context.Context, _ *devplatformv1alpha1.Workspace, kind, detail string) {
+	n.kinds = append(n.kinds, kind)
+	n.details = append(n.details, detail)
+}
+
+// createTemplateOnNode builds a template pinned to its own node, so a test that
+// takes that node down does not disturb the Node object every other test in
+// this package shares.
+func createTemplateOnNode(t *testing.T, ctx context.Context, ns, name, nodeName string) {
+	t.Helper()
+	tmpl := &devplatformv1alpha1.WorkspaceTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: devplatformv1alpha1.WorkspaceTemplateSpec{
+			Image: "busybox:1.36",
+			Resources: devplatformv1alpha1.WorkspaceResources{
+				Requests: devplatformv1alpha1.ResourceList{CPU: "100m", Memory: "128Mi"},
+				Limits:   devplatformv1alpha1.ResourceList{CPU: "500m", Memory: "256Mi"},
+			},
+			Storage:    devplatformv1alpha1.WorkspaceStorage{Size: "1Gi"},
+			NodeName:   nodeName,
+			Database:   devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
+			Auth:       devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
+			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", SecretRef: "garage-evacuation-credentials"},
+		},
+	}
+	if err := testClient.Create(ctx, tmpl); err != nil {
+		t.Fatalf("create WorkspaceTemplate: %v", err)
+	}
+	ensureStagedNode(t, ctx, nodeName, tmpl.Spec.Image)
+}
+
+func setNodeReady(t *testing.T, ctx context.Context, nodeName string, ready bool) {
+	t.Helper()
+	var node corev1.Node
+	if err := testClient.Get(ctx, types.NamespacedName{Name: nodeName}, &node); err != nil {
+		t.Fatalf("get Node %s: %v", nodeName, err)
+	}
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	node.Status.Conditions = []corev1.NodeCondition{{
+		Type:              corev1.NodeReady,
+		Status:            status,
+		LastHeartbeatTime: metav1.Now(),
+	}}
+	if err := testClient.Status().Update(ctx, &node); err != nil {
+		t.Fatalf("set Node %s ready=%v: %v", nodeName, ready, err)
+	}
+}
+
+// suspendToNode drives a workspace on its own node all the way to Suspended.
+func suspendToNode(t *testing.T, ctx context.Context, ns, name, templateRef string) types.NamespacedName {
+	t.Helper()
+	createWorkspace(t, ctx, ns, name, "https://gitea.fickledev.com/tom1022/demo.git", "feature/"+name, templateRef)
+	req := types.NamespacedName{Name: name, Namespace: ns}
+
+	r := newTestReconciler()
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	var ws devplatformv1alpha1.Workspace
+	if err := testClient.Get(ctx, req, &ws); err != nil {
+		t.Fatalf("get Workspace: %v", err)
+	}
+	markStatefulSetReady(t, ctx, ns, ws.Status.WorkspaceId)
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	backdateLastActivity(t, ctx, req, time.Now().Add(-31*time.Minute))
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("suspend reconcile: %v", err)
+	}
+	return req
+}
+
+func TestReconcile_NotifiesOnceThatALostNodeBlocksResumeWithWorkEvacuated(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createTemplateOnNode(t, ctx, ns, "own-node", "node-lost-evacuated")
+	req := suspendToNode(t, ctx, ns, "ws-node-evacuated", "own-node")
+
+	var ws devplatformv1alpha1.Workspace
+	if err := testClient.Get(ctx, req, &ws); err != nil {
+		t.Fatalf("get Workspace: %v", err)
+	}
+	captured := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	ws.Status.LastEvacuation = &devplatformv1alpha1.EvacuationSnapshot{
+		WorkspaceId: ws.Status.WorkspaceId,
+		BundleKey:   "workspace/" + ws.Status.WorkspaceId + "/latest/bundle.git",
+		CapturedAt:  &captured,
+	}
+	if err := testClient.Status().Update(ctx, &ws); err != nil {
+		t.Fatalf("record snapshot: %v", err)
+	}
+
+	setNodeReady(t, ctx, "node-lost-evacuated", false)
+
+	rec := &notifyRecorder{}
+	r := newTestReconciler()
+	r.Notify = rec.record
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(rec.kinds) != 1 || rec.kinds[0] != EventNodeUnavailable {
+		t.Fatalf("kinds = %v, want one %s", rec.kinds, EventNodeUnavailable)
+	}
+	detail := rec.details[0]
+	for _, want := range []string{"node-lost-evacuated", captured.UTC().Format(time.RFC3339)} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail %q does not mention %q", detail, want)
+		}
+	}
+
+	// 13.9 asks for one notification about a standing condition, not one per
+	// reconcile pass.
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if len(rec.kinds) != 1 {
+		t.Errorf("notified %d times, want 1", len(rec.kinds))
+	}
+}
+
+// The two outcomes 13.9 has to keep apart: the node is gone but the work is
+// off-node, versus the node is gone and nothing was ever captured.
+func TestReconcile_LostNodeNotificationSaysWhenNothingWasEvacuated(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createTemplateOnNode(t, ctx, ns, "own-node", "node-lost-unevacuated")
+	req := suspendToNode(t, ctx, ns, "ws-node-unevacuated", "own-node")
+
+	// Suspending evacuates first, so the never-evacuated state — a node lost
+	// while the workspace was still Ready, or an evacuation that never
+	// succeeded — has to be restored explicitly here.
+	var ws devplatformv1alpha1.Workspace
+	if err := testClient.Get(ctx, req, &ws); err != nil {
+		t.Fatalf("get Workspace: %v", err)
+	}
+	ws.Status.LastEvacuation = nil
+	if err := testClient.Status().Update(ctx, &ws); err != nil {
+		t.Fatalf("clear snapshot: %v", err)
+	}
+
+	setNodeReady(t, ctx, "node-lost-unevacuated", false)
+
+	rec := &notifyRecorder{}
+	r := newTestReconciler()
+	r.Notify = rec.record
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(rec.details) != 1 {
+		t.Fatalf("notified %d times, want 1", len(rec.details))
+	}
+	if !strings.Contains(rec.details[0], "no evacuation snapshot") {
+		t.Errorf("detail %q does not distinguish unevacuated work from a recoverable one", rec.details[0])
+	}
+}
+
+// A node can also die while the workspace is still Ready; its Pod cannot be
+// rescheduled because the working directory is pinned to that node.
+func TestReconcile_NotifiesWhenAReadyWorkspaceLosesItsNode(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createTemplateOnNode(t, ctx, ns, "own-node", "node-lost-while-ready")
+	createWorkspace(t, ctx, ns, "ws-node-ready", "https://gitea.fickledev.com/tom1022/demo.git", "feature/ready", "own-node")
+	req := types.NamespacedName{Name: "ws-node-ready", Namespace: ns}
+
+	r := newTestReconciler()
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	var ws devplatformv1alpha1.Workspace
+	if err := testClient.Get(ctx, req, &ws); err != nil {
+		t.Fatalf("get Workspace: %v", err)
+	}
+	markStatefulSetReady(t, ctx, ns, ws.Status.WorkspaceId)
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	setNodeReady(t, ctx, "node-lost-while-ready", false)
+
+	rec := &notifyRecorder{}
+	r.Notify = rec.record
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: req}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(rec.kinds) != 1 || rec.kinds[0] != EventNodeUnavailable {
+		t.Fatalf("kinds = %v, want one %s", rec.kinds, EventNodeUnavailable)
 	}
 }

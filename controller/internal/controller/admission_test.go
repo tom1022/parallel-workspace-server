@@ -67,7 +67,7 @@ func TestReconcile_HoldsForImageNotStaged(t *testing.T) {
 			NodeName:   "node-without-prestage",
 			Database:   devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 			Auth:       devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
-			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace"},
+			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", SecretRef: "garage-evacuation-credentials"},
 		},
 	}
 	if err := testClient.Create(ctx, tmpl); err != nil {
@@ -142,7 +142,7 @@ func TestReconcile_HoldsForNodeDiskBudgetExceeded(t *testing.T) {
 			NodeName:   "test-node",
 			Database:   devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 			Auth:       devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
-			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace"},
+			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", SecretRef: "garage-evacuation-credentials"},
 		},
 	}
 	if err := testClient.Create(ctx, tmpl); err != nil {

@@ -60,6 +60,12 @@ type WorkspaceAuthRef struct {
 type WorkspaceEvacuation struct {
 	// +kubebuilder:validation:MinLength=1
 	Bucket string `json:"bucket"`
+
+	// SecretRef names the Secret holding the destination's S3 credentials
+	// (keys access-key and secret-key). Only the workspace Pod reads them:
+	// the control plane asks for an evacuation but never performs one.
+	// +kubebuilder:validation:MinLength=1
+	SecretRef string `json:"secretRef"`
 }
 
 // WorkspaceTemplateSpec mirrors crd-workspacetemplate.yaml. It is the operator-

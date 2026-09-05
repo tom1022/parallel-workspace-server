@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tom1022/gitops-apps/apps/devplatform/supervisor/internal/evacuation"
 	"github.com/tom1022/gitops-apps/apps/devplatform/supervisor/internal/session"
 )
 
@@ -27,6 +29,15 @@ const (
 	historyLimit = 50000
 
 	crashPollInterval = 2 * time.Second
+
+	// evacuationPollInterval paces both the turn-completion watch and the
+	// settle wait an explicit evacuation request performs.
+	evacuationPollInterval = 5 * time.Second
+
+	// evacuationSettleTimeout bounds how long an explicit request waits for an
+	// executing turn to finish writing (16.6). Exceeding it fails the request,
+	// which keeps the caller from stopping the workspace unevacuated (16.8).
+	evacuationSettleTimeout = 10 * time.Minute
 
 	// authProbePrompt is deliberately trivial: 5.7 asks for proof that the
 	// credential works over the real route, not for useful output.
@@ -54,6 +65,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "restore" {
+		if err := restore(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if err := serve(); err != nil {
 		log.Fatal(err)
 	}
@@ -70,6 +87,43 @@ func attach(args []string) error {
 	}
 	tm := &session.Tmux{Socket: tmuxSocket, Session: tmuxSession}
 	return tm.Attach(!*takeover)
+}
+
+// restore reconstructs the working directory from the last evacuation after
+// the node holding it was lost (16.9). It runs from the init container, right
+// after the clone that gives it a tree to replay onto, and is a no-op when
+// that tree already holds local work.
+func restore() error {
+	agent := newEvacuationAgent(workingDirFromEnv())
+	if agent.Store.Endpoint == "" {
+		// The init container must not block a workspace whose template
+		// predates an evacuation destination; the supervisor itself fails
+		// loudly on the next turn instead.
+		log.Print("no evacuation destination configured, skipping restore")
+		return nil
+	}
+	return agent.Restore(context.Background())
+}
+
+// workingDirFromEnv resolves the same working directory the init container and
+// the supervisor both address, from whichever of the two variables is set.
+func workingDirFromEnv() string {
+	defaultWorkingDir, _, _ := session.Paths(env("WORKSPACE_MOUNT", defaultMountRoot))
+	return env("WORKSPACE_DIR", defaultWorkingDir)
+}
+
+func newEvacuationAgent(workingDir string) *evacuation.Agent {
+	return &evacuation.Agent{
+		WorkingDir:  workingDir,
+		WorkspaceId: env("WORKSPACE_ID", os.Getenv("WORKSPACE_NAME")),
+		Store: &evacuation.S3{
+			Endpoint:  os.Getenv("EVACUATION_ENDPOINT"),
+			Bucket:    os.Getenv("EVACUATION_BUCKET"),
+			Region:    env("EVACUATION_REGION", "garage"),
+			AccessKey: os.Getenv("EVACUATION_ACCESS_KEY"),
+			SecretKey: os.Getenv("EVACUATION_SECRET_KEY"),
+		},
+	}
 }
 
 func serve() error {
@@ -119,6 +173,13 @@ func serve() error {
 
 	health := &session.Health{ConfigDir: configDir}
 
+	evacuator := &evacuation.Trigger{
+		Agent: newEvacuationAgent(workingDir),
+		Turn:  turnReader(sup),
+		Poll:  evacuationPollInterval,
+		Wait:  evacuationSettleTimeout,
+	}
+
 	claudeCmd := []string{env("CLAUDE_COMMAND", "claude")}
 	err = tm.Start(session.StartConfig{
 		WorkingDir:   workingDir,
@@ -135,11 +196,26 @@ func serve() error {
 	defer stop()
 	go watchProcess(ctx, sup, workspace, hermesURL)
 	go probeAuth(sup, health, workspace, hermesURL)
+	go evacuator.WatchTurns(ctx, func(err error) {
+		log.Printf("evacuation after turn failed: %v", err)
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/", sup.Handler())
 	mux.Handle("GET /health", health.Handler())
 	mux.Handle("GET /usage", health.Handler())
+	// Requested before the control plane suspends or destroys this workspace.
+	// It answers only once the working directory is safely off-node, so a
+	// failure here is the caller's signal to leave the workspace running.
+	mux.HandleFunc("POST /evacuate", func(w http.ResponseWriter, r *http.Request) {
+		snap, err := evacuator.EvacuateWhenSettled(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snap)
+	})
 	mux.HandleFunc("POST /release-context", func(w http.ResponseWriter, r *http.Request) {
 		if err := sup.ReleaseContext(); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -184,6 +260,23 @@ func probeAuth(sup *session.Supervisor, health *session.Health, workspace, herme
 	// nothing to do with the work that follows (7.16).
 	if err := sup.ReleaseContext(); err != nil {
 		log.Printf("releasing probe context failed: %v", err)
+	}
+}
+
+// turnReader adapts the session's turn state to what the evacuation triggers
+// need: whether writes may still be in flight, and a value that changes each
+// time a turn completes.
+func turnReader(sup *session.Supervisor) func() (bool, string, error) {
+	return func() (bool, string, error) {
+		state, err := sup.TurnState()
+		if err != nil {
+			return false, "", err
+		}
+		busy := state.Kind == session.TurnRunning || state.Kind == session.TurnAwaitingTool
+		if state.Kind != session.TurnCompleted {
+			return busy, "", nil
+		}
+		return busy, state.EndedAt, nil
 	}
 }
 

@@ -48,6 +48,13 @@ const (
 	conditionResumeRequested = "ResumeRequested"
 	// conditionDestroyCandidate marks 13.8's destroy-candidate notification.
 	conditionDestroyCandidate = "DestroyCandidate"
+	// conditionNodeAvailable tracks whether the node holding the working
+	// directory is usable, and doubles as 13.9's send-once latch.
+	conditionNodeAvailable = "NodeAvailable"
+
+	// EventNodeUnavailable is the notification kind reported when the node a
+	// workspace's working directory is pinned to cannot run it (13.9).
+	EventNodeUnavailable = "NodeUnavailable"
 )
 
 // MarkActivity records fresh activity against ws — a Terminal Gateway
@@ -77,6 +84,10 @@ func (r *WorkspaceReconciler) MarkActivity(ctx context.Context, ws *devplatformv
 // — or a caller explicitly requests it via spec.desiredPhase — it suspends
 // the workspace.
 func (r *WorkspaceReconciler) reconcileReady(ctx context.Context, ws *devplatformv1alpha1.Workspace) (ctrl.Result, error) {
+	if err := r.checkNodeAvailable(ctx, ws); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	idle := ws.Status.LastActivityAt != nil && r.now().Sub(ws.Status.LastActivityAt.Time) >= defaultIdleSuspendTimeout
 	requested := ws.Spec.DesiredPhase == devplatformv1alpha1.DesiredPhaseSuspended
 	if !idle && !requested {
@@ -85,6 +96,16 @@ func (r *WorkspaceReconciler) reconcileReady(ctx context.Context, ws *devplatfor
 
 	resourceName := ws.Status.WorkspaceId
 	if resourceName != "" {
+		evacuated, err := r.evacuateBeforeStop(ctx, ws, resourceName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		// 16.8 admits no stop without an evacuation, so a workspace whose
+		// working directory could not be captured stays Ready and keeps
+		// running until the destination comes back.
+		if !evacuated {
+			return ctrl.Result{RequeueAfter: idleCheckInterval}, nil
+		}
 		if err := r.scaleStatefulSet(ctx, ws.Namespace, resourceName, 0); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -110,6 +131,9 @@ func (r *WorkspaceReconciler) reconcileReady(ctx context.Context, ws *devplatfor
 func (r *WorkspaceReconciler) reconcileSuspended(ctx context.Context, ws *devplatformv1alpha1.Workspace) (ctrl.Result, error) {
 	if meta.IsStatusConditionTrue(ws.Status.Conditions, conditionResumeRequested) {
 		return r.reconcileResume(ctx, ws)
+	}
+	if err := r.checkNodeAvailable(ctx, ws); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if cond := meta.FindStatusCondition(ws.Status.Conditions, conditionSuspended); cond != nil && cond.Status == metav1.ConditionTrue {
@@ -166,6 +190,88 @@ func (r *WorkspaceReconciler) reconcileResume(ctx context.Context, ws *devplatfo
 	return ctrl.Result{}, r.Status().Update(ctx, ws)
 }
 
+// checkNodeAvailable reports 13.9: the working directory is a node-pinned
+// volume, so a node that cannot run the workspace makes resuming it impossible
+// rather than merely slow. The notification carries the evacuation status
+// alongside, because the two outcomes a reader has to tell apart are "the node
+// is gone but the work is off-node" and "the node is gone and the work with
+// it".
+//
+// conditionNodeAvailable latches the notification: the condition tracks a
+// standing state that persists across every requeue, so without it the same
+// dead node would be reported once a minute.
+func (r *WorkspaceReconciler) checkNodeAvailable(ctx context.Context, ws *devplatformv1alpha1.Workspace) error {
+	tmpl, err := r.getTemplate(ctx, ws)
+	if err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	available, err := r.nodeAvailable(ctx, tmpl.Spec.NodeName)
+	if err != nil {
+		return err
+	}
+
+	if available {
+		if meta.FindStatusCondition(ws.Status.Conditions, conditionNodeAvailable) == nil {
+			return nil
+		}
+		meta.SetStatusCondition(&ws.Status.Conditions, metav1.Condition{
+			Type:    conditionNodeAvailable,
+			Status:  metav1.ConditionTrue,
+			Reason:  "NodeReady",
+			Message: fmt.Sprintf("node %q is ready", tmpl.Spec.NodeName),
+		})
+		return r.Status().Update(ctx, ws)
+	}
+
+	if meta.IsStatusConditionFalse(ws.Status.Conditions, conditionNodeAvailable) {
+		return nil
+	}
+	detail := fmt.Sprintf("node %q is unavailable; this workspace cannot be resumed because its working directory is pinned to that node. %s",
+		tmpl.Spec.NodeName, evacuationStatusDetail(ws))
+	meta.SetStatusCondition(&ws.Status.Conditions, metav1.Condition{
+		Type:    conditionNodeAvailable,
+		Status:  metav1.ConditionFalse,
+		Reason:  "NodeUnavailable",
+		Message: detail,
+	})
+	if err := r.Status().Update(ctx, ws); err != nil {
+		return err
+	}
+	r.notify(ctx, ws, EventNodeUnavailable, detail)
+	return nil
+}
+
+// nodeAvailable treats a missing Node the same as one that is not Ready: in
+// both cases nothing will schedule onto it.
+func (r *WorkspaceReconciler) nodeAvailable(ctx context.Context, nodeName string) (bool, error) {
+	var node corev1.Node
+	if err := r.nodeReader().Get(ctx, types.NamespacedName{Name: nodeName}, &node); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, c := range node.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue, nil
+		}
+	}
+	return false, nil
+}
+
+// evacuationStatusDetail spells out whether the work survives the node.
+func evacuationStatusDetail(ws *devplatformv1alpha1.Workspace) string {
+	snap := ws.Status.LastEvacuation
+	if snap == nil {
+		return "There is no evacuation snapshot for it, so uncommitted work on that node may be lost."
+	}
+	captured := "an unrecorded time"
+	if snap.CapturedAt != nil {
+		captured = snap.CapturedAt.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("Its working directory was evacuated at %s to %s and can be reconstructed elsewhere.", captured, snap.BundleKey)
+}
+
 func (r *WorkspaceReconciler) scaleStatefulSet(ctx context.Context, namespace, name string, replicas int32) error {
 	var sts appsv1.StatefulSet
 	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &sts); err != nil {
@@ -206,6 +312,17 @@ func (r *WorkspaceReconciler) reconcileTerminating(ctx context.Context, ws *devp
 		if err := r.Status().Update(ctx, ws); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+
+	// The evacuation has to be asked for while the Pod that would perform it
+	// still exists, so it precedes the StatefulSet delete rather than the PVC
+	// delete the finalizer already gates.
+	evacuated, err := r.evacuateBeforeStop(ctx, ws, resourceName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !evacuated {
+		return ctrl.Result{RequeueAfter: evacuationPollInterval}, nil
 	}
 
 	if err := client.IgnoreNotFound(r.Delete(ctx, &appsv1.StatefulSet{

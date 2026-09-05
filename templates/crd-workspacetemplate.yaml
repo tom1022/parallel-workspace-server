@@ -132,8 +132,15 @@ spec:
                   type: object
                   required:
                     - bucket
+                    - secretRef
                   properties:
                     bucket:
                       type: string
                       description: 作業内容の退避先 Garage バケット名 (16.7-16.9)。
+                      minLength: 1
+                    secretRef:
+                      type: string
+                      description: |
+                        退避先 Garage の S3 資格情報を保持する Secret 名。ワークスペース Pod が
+                        access-key / secret-key の 2 キーを環境変数として読む。
                       minLength: 1
