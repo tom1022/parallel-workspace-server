@@ -3,11 +3,13 @@
 # policyTypes に Ingress/Egress 両方を指定することで既定 deny へ切り替える (14.7/14.8)。
 #
 # ingress: 同一 namespace 内の Pod 間に加えて、制御プレーン namespace から Session Supervisor
-# のポートへの到達のみを許可する。Workspace Controller は中断・破棄の前段で
-# POST /evacuate を呼ぶ必要があり (16.8)、これがワークスペース外から入る唯一の経路。
-# それ以外の namespace からの到達は拒否する。開発者接続は共有ゲートウェイ経由の
-# IngressRoute の話であり、本 NetworkPolicy の対象外 (Terminal Gateway の到達経路は
-# 別タスクで確定する)。
+# のポートへの到達と、subnet router namespace からワークスペース sshd への到達のみを許可する。
+# ワークスペース外から入る経路はこの 3 つだけで、Workspace Controller の POST /evacuate
+# (16.8) と、共有端末ゲートウェイが開発者のブラウザ接続を中継するための出力取得・入力送出、
+# そして統合開発環境からの任意経路 (4.7) が該当する。前 2 つはいずれも Release.Namespace
+# (devplatform) に居るため同一の from で足りる。それ以外の namespace からの到達は拒否する。
+# subnet router は経路を SNAT して転送するため、送信元は Connector が生成する Pod となり
+# namespaceSelector で絞れる。
 #
 # egress: 同一 namespace 内 Pod、devplatform-db namespace (ブランチ専用 DB、5432/tcp)、
 # garage namespace (退避・レポート保管先のオブジェクトストレージ、3900/tcp)、kube-system
@@ -43,6 +45,13 @@ spec:
       ports:
         - protocol: TCP
           port: 8787
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.subnetRouterNamespace }}
+      ports:
+        - protocol: TCP
+          port: 22
   egress:
     - to:
         - podSelector: {}

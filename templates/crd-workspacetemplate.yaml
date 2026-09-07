@@ -80,21 +80,23 @@ spec:
                           pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
                 storage:
                   type: object
-                  description: 作業ディレクトリ用 PVC。local-path は拡張不可のため size が事実上の上限(C-7)。
+                  description: |
+                    作業ディレクトリ用 PVC。local-path は拡張不可のため size が事実上の上限(C-7)。
+                    接続中のみ存在する VS Code Server (.vscode-server) の分もこの容量に含める(4.10)。
                   default:
-                    size: 20Gi
+                    size: 22Gi
                   properties:
                     size:
                       type: string
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
-                      default: 20Gi
+                      default: 22Gi
                     nodeDiskBudget:
                       type: string
                       description: |
                         この nodeName へ配置された全ワークスペースの作業ディレクトリ容量 (size) 合計に対する上限
                         (15.11)。実測ディスク使用量ではなく宣言値の合計による近似。空文字は上限なしを意味する。
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
-                      default: 100Gi
+                      default: 110Gi
                 nodeName:
                   type: string
                   description: |

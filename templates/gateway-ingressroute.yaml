@@ -1,0 +1,65 @@
+---
+# ワークスペースのホスト名 (fickledev.com 直下の単一ラベル) をまとめてゲートウェイへ
+# 向ける受け口。ワークスペースごとの接続先ルートを Workspace Controller が作らないのは
+# このためで、払い出し・破棄でルーティング定義が増減しない (11.4)。
+#
+# priority を明示的に最小値にする: Traefik は既定でルール文字列長を priority とするため、
+# 既存アプリの Host(`...`) ルートより確実に後段へ落とす。ここに落ちてくる未定義の
+# ホスト名にはゲートウェイが 404 を返す。
+#
+# 認証は既存の forward auth 経路へ委ね、ゲートウェイ自身では実装しない (4.6/4.9/11.5)。
+# Middleware は Chain 自身の namespace ではなく参照側の namespace を起点に解決されるため、
+# CRD プロバイダの修飾名で指定する (apps/common/middlewares.yaml 参照)。
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: devplatform-gateway-workspaces
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: devplatform-gateway
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.gateway.domain | replace "." "\\." }}$`)
+      priority: 1
+      middlewares:
+        - name: argocd-forward-auth-chain@kubernetescrd
+      services:
+        - name: devplatform-gateway
+          port: {{ .Values.gateway.port }}
+  tls:
+    secretName: tls-fickledev-com
+---
+# 統合開発環境向け制御面 (/api/) の受け口。ワークスペース側と同じ前段 (偽装ヘッダの除去 →
+# 接続元アドレス制限 → forward auth) を通すが、forward auth は Authorization を判定
+# ワークロードへ渡す forward-auth-bearer を使い、Bearer JWT をゲートウェイまで素通しさせる
+# (4.12)。素通しがこのホスト名に閉じるのは、共通の forward-auth が Authorization を
+# 渡さないため (apps/common/middlewares.yaml)。
+#
+# error-redirect を挟まないのは意図的で、欠落・不正・期限切れトークンをログイン画面への
+# 誘導ではなく拒否として返すため。前段を通過したかに関わらず、ゲートウェイ自身も全 /api/
+# 要求のトークンを検証する。
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: devplatform-gateway-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: devplatform-gateway
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`{{ .Values.gateway.apiHost }}.{{ .Values.gateway.domain }}`)
+      middlewares:
+        - name: argocd-strip-auth-headers@kubernetescrd
+        - name: argocd-local-whitelist@kubernetescrd
+        - name: oauth2-proxy-forward-auth-bearer@kubernetescrd
+      services:
+        - name: devplatform-gateway
+          port: {{ .Values.gateway.port }}
+  tls:
+    secretName: tls-fickledev-com

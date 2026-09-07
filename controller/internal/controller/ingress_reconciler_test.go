@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -47,7 +48,7 @@ func provisionToReady(t *testing.T, ctx context.Context, ns, name, branch string
 	return resourceName
 }
 
-func TestReconcile_CreatesThreeIngressRoutes(t *testing.T) {
+func TestReconcile_CreatesPreviewAndReportIngressRoutes(t *testing.T) {
 	ctx := context.Background()
 	ns := newNamespace(t)
 	createTemplate(t, ctx, ns, "default")
@@ -59,7 +60,6 @@ func TestReconcile_CreatesThreeIngressRoutes(t *testing.T) {
 		wantPort    int64
 	}{
 		{"-preview", resourceName + "-preview", previewServicePort},
-		{"-session", resourceName, sessionServicePort},
 		{"-report", resourceName + "-report", reportServicePort},
 	}
 
@@ -172,7 +172,7 @@ func TestReconcile_DestroyGCsIngressRoutes(t *testing.T) {
 	// envtest has no kube-controller-manager to actually run garbage
 	// collection, so this only locks in the precondition GC depends on: every
 	// IngressRoute carries ws as its controller owner (asserted already in
-	// TestReconcile_CreatesThreeIngressRoutes), which is what makes
+	// TestReconcile_CreatesPreviewAndReportIngressRoutes), which is what makes
 	// Kubernetes delete it when the Workspace is deleted. This test instead
 	// asserts the owner reference points at the live Workspace UID so a
 	// stale/zero UID (which would silently break GC) is caught.
@@ -181,12 +181,31 @@ func TestReconcile_DestroyGCsIngressRoutes(t *testing.T) {
 		t.Fatalf("get Workspace: %v", err)
 	}
 
-	ir := getIngressRoute(t, ctx, ns, resourceName+"-session")
+	ir := getIngressRoute(t, ctx, ns, resourceName+hostSuffixPreview)
 	owner := ir.GetOwnerReferences()[0]
 	if owner.UID != ws.UID {
 		t.Errorf("IngressRoute owner UID = %q, want Workspace UID %q", owner.UID, ws.UID)
 	}
 	if owner.Controller == nil || !*owner.Controller {
 		t.Error("IngressRoute owner reference is not marked as controller; GC-on-delete relies on this")
+	}
+}
+
+// TestReconcile_LeavesSessionHostnameToTheGateway locks in 4.3/4.9: the
+// connection hostname is served by the single shared Terminal Gateway, which
+// resolves it back to this Workspace through the Kubernetes API. A
+// per-workspace route here would take precedence over the gateway's wildcard
+// route and strand the hostname on a backend that does not exist.
+func TestReconcile_LeavesSessionHostnameToTheGateway(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createTemplate(t, ctx, ns, "default")
+	resourceName := provisionToReady(t, ctx, ns, "ws-ingress-session", "feature/ingress-session")
+
+	name := resourceName + "-session"
+	ir := ingressRouteRef(ns, name)
+	err := testClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, ir)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("get IngressRoute %s error = %v, want NotFound", name, err)
 	}
 }

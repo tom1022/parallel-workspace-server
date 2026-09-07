@@ -13,7 +13,9 @@ metadata:
     # (要件 17.5 の実効的な適用範囲として、テンプレート実体にも付与する)。
     argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
-  image: {{ .Values.workspaceTemplate.image | quote }}
+  # 事前配置 (image-prestage-daemonset.yaml) と同一の参照。両者が食い違うと、
+  # 配置完了を根拠とする払い出し条件 (15.4) が別のイメージについて成立する。
+  image: "{{ .Values.workspaceImage.repository }}:{{ .Values.workspaceImage.tag }}{{ if .Values.workspaceImage.digest }}@{{ .Values.workspaceImage.digest }}{{ end }}"
   resources:
     requests:
       cpu: {{ .Values.workspaceTemplate.resources.requests.cpu | quote }}

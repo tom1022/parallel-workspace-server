@@ -46,6 +46,23 @@ const (
 	supervisorBinaryPath = "/usr/local/bin/supervisor"
 	supervisorPort       = 8787
 
+	// sshPort is the workspace's own sshd, which the supervisor starts and
+	// which only the private network route reaches (4.7). It is not exposed
+	// through an IngressRoute: certificates are the only credential it
+	// accepts, and the browser route never uses it.
+	sshPort = 22
+
+	// The certificate authority the workspace's sshd trusts. Only the public
+	// half reaches a workspace; the private key stays in the gateway's own
+	// namespace (4.11). The Secret name and key mirror
+	// templates/infisical-secret.yaml, and the mount is optional so a cluster
+	// that has not supplied an authority keeps the browser route (4.3) and
+	// loses only the IDE route.
+	sshCAPublicKeySecretName = "devplatform-workspace-ssh-ca"
+	sshCAPublicKeyKey        = "ca.pub"
+	sshCAVolumeName          = "ssh-ca"
+	sshCAMountPath           = "/run/devplatform/ssh-ca"
+
 	localPathStorageClass = "local-path"
 
 	// garageS3Endpoint is the in-cluster S3 API of apps/garage. Like the
@@ -58,6 +75,16 @@ const (
 	// Key names inside the evacuation destination's credential Secret.
 	evacuationAccessKeyKey = "access-key"
 	evacuationSecretKeyKey = "secret-key"
+
+	// The branch role's TLS client certificate, which CNPG issues into
+	// "<databaserole-name>-client-cert" (database_reconciler.go). Mounting it
+	// also gates the Pod on the role actually existing, which is the trigger
+	// DB Bootstrap needs (8.5) — kubelet holds the containers until the Secret
+	// is there.
+	databaseCertVolumeName = "database-client-cert"
+	databaseCertMountPath  = "/run/devplatform/database"
+	databaseCertSecretName = "-client-cert"
+	databasePort           = "5432"
 
 	defaultWorkspaceStorageSize = "20Gi"
 )
@@ -177,6 +204,8 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		secretEnv("EVACUATION_SECRET_KEY", tmpl.Spec.Evacuation.SecretRef, evacuationSecretKeyKey),
 	}
 
+	databaseEnv := branchDatabaseEnv(ws, tmpl, resourceName)
+
 	initEnv := append([]corev1.EnvVar{
 		{Name: "WORKSPACE_DIR", Value: workingDirPath},
 		{Name: "WORKSPACE_REPOSITORY", Value: ws.Spec.Repository},
@@ -192,7 +221,12 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		{Name: "WORKSPACE_MOUNT", Value: workspaceMountPath},
 		{Name: "WORKSPACE_NAME", Value: ws.Name},
 		{Name: "CLAUDE_AUTH_FILE", Value: authMountPath + "/credentials.json"},
+		{Name: "SSH_CA_PUBLIC_KEY", Value: sshCAMountPath + "/" + sshCAPublicKeyKey},
 	}, evacuationEnv...)
+	// 8.8: every process started under the working directory inherits the
+	// branch's own connection, so nothing in the repository has to be
+	// configured for a per-branch database.
+	workspaceEnv = append(workspaceEnv, databaseEnv...)
 
 	// Left unset when the template does not pin one, so Claude Code applies its
 	// own default rather than this controller inventing a model name (7.3).
@@ -213,10 +247,32 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 				Secret: &corev1.SecretVolumeSource{SecretName: tmpl.Spec.Auth.SecretRef},
 			},
 		},
+		{
+			Name: databaseCertVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: resourceName + databaseCertSecretName,
+					// libpq refuses a private key readable by anyone but its
+					// owner, and a Secret volume is 0644 by default.
+					DefaultMode: ptr(int32(0o600)),
+				},
+			},
+		},
+		{
+			Name: sshCAVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: sshCAPublicKeySecretName,
+					Optional:   ptr(true),
+				},
+			},
+		},
 	}
 	volumeMounts := []corev1.VolumeMount{
 		{Name: workspaceVolumeName, MountPath: workspaceMountPath},
 		{Name: authSecretVolumeName, MountPath: authMountPath, ReadOnly: true},
+		{Name: databaseCertVolumeName, MountPath: databaseCertMountPath, ReadOnly: true},
+		{Name: sshCAVolumeName, MountPath: sshCAMountPath, ReadOnly: true},
 	}
 
 	replicas := int32(1)
@@ -245,6 +301,18 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 							Env:          initEnv,
 							VolumeMounts: volumeMounts,
 						},
+						// Second, because it reads the repository's own
+						// declaration of how it migrates out of the checkout
+						// the container above produces, and the schema has to
+						// be in place before the session is handed the branch
+						// (8.5).
+						{
+							Name:         "db-bootstrap",
+							Image:        tmpl.Spec.Image,
+							Command:      []string{supervisorBinaryPath, "dbboot"},
+							Env:          append(append([]corev1.EnvVar{}, initEnv...), databaseEnv...),
+							VolumeMounts: volumeMounts,
+						},
 					},
 					Containers: []corev1.Container{
 						{
@@ -254,6 +322,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 							Env:     workspaceEnv,
 							Ports: []corev1.ContainerPort{
 								{Name: "supervisor", ContainerPort: supervisorPort},
+								{Name: "ssh", ContainerPort: sshPort},
 							},
 							Resources: corev1.ResourceRequirements{
 								Requests: requests,
@@ -269,6 +338,36 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 	}
 	return sts, nil
 }
+
+// branchDatabaseEnv is the branch's connection, in libpq's own variable names
+// so a repository's migration tool and application pick it up without being
+// told about this platform, plus the URL form the JavaScript ecosystem expects.
+//
+// The Database and DatabaseRole are created in the workspace's namespace
+// (database_reconciler.go), so the instance serving them is addressed there too.
+//
+// ponytail: sslmode=require, not verify-full — the client certificate still
+// authenticates us to the server, and verifying the server in turn would mean
+// mounting the cluster CA as a second Secret for an in-cluster hop.
+func branchDatabaseEnv(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alpha1.WorkspaceTemplate, resourceName string) []corev1.EnvVar {
+	host := fmt.Sprintf("%s-rw.%s.svc.cluster.local", tmpl.Spec.Database.ClusterRef, ws.Namespace)
+	cert := databaseCertMountPath + "/tls.crt"
+	key := databaseCertMountPath + "/tls.key"
+	return []corev1.EnvVar{
+		{Name: "PGHOST", Value: host},
+		{Name: "PGPORT", Value: databasePort},
+		{Name: "PGDATABASE", Value: resourceName},
+		{Name: "PGUSER", Value: resourceName},
+		{Name: "PGSSLMODE", Value: "require"},
+		{Name: "PGSSLCERT", Value: cert},
+		{Name: "PGSSLKEY", Value: key},
+		{Name: "DATABASE_URL", Value: fmt.Sprintf(
+			"postgresql://%s@%s:%s/%s?sslmode=require&sslcert=%s&sslkey=%s",
+			resourceName, host, databasePort, resourceName, cert, key)},
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 func secretEnv(name, secretName, key string) corev1.EnvVar {
 	return corev1.EnvVar{

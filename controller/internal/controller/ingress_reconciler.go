@@ -41,13 +41,10 @@ const (
 	fickledevDomain = "fickledev.com"
 
 	// Backend ports the per-workspace Service is expected to expose once the
-	// Session Supervisor (task 3) and Test Runner (task 9) exist to back
-	// them; nothing creates that Service yet (same "declare the route ahead
-	// of its backend" state apps/devplatform/templates/gateway-deployment.yaml
-	// is already in). Declaring the contract here lets those tasks land
-	// without renegotiating the routing config.
+	// Test Runner (task 9) exists to back them; nothing creates that Service
+	// yet. Declaring the contract here lets that task land without
+	// renegotiating the routing config.
 	previewServicePort = 3000
-	sessionServicePort = 7681
 	reportServicePort  = 8080
 
 	hostSuffixPreview = "-preview"
@@ -60,6 +57,12 @@ const (
 // with no further dots — a multi-level hostname TLS-terminates silently with
 // Traefik's default self-signed certificate instead of failing loudly. The
 // three systems are told apart by a suffix on that label, not by depth.
+// Session is not routed from here: it is served by the single shared Terminal
+// Gateway, whose wildcard route (apps/devplatform/templates/gateway-ingressroute.yaml)
+// catches the bare label and resolves it back to this Workspace through the
+// Kubernetes API. A per-workspace route for it would outrank that wildcard —
+// Traefik prioritises by rule length — and point the hostname at a backend
+// that does not exist.
 type workspaceHostnames struct {
 	Preview string
 	Session string
@@ -129,8 +132,8 @@ func buildIngressRoute(ws *devplatformv1alpha1.Workspace, name, host, resourceNa
 	return ir
 }
 
-// reconcileIngress creates the three IngressRoutes fronting a workspace and
-// returns the URLs they make reachable (11.1). Each carries an
+// reconcileIngress creates the IngressRoutes fronting a workspace and returns
+// all three URLs it makes reachable (11.1). Each route carries an
 // OwnerReference to ws, so Kubernetes' garbage collector removes it only
 // when ws itself is deleted (11.7). No cloudflared/DNS change is needed per
 // workspace: every hostname here already falls under the wildcard already
@@ -144,7 +147,6 @@ func (r *WorkspaceReconciler) reconcileIngress(ctx context.Context, ws *devplatf
 		port int64
 	}{
 		{resourceName + hostSuffixPreview, hosts.Preview, previewServicePort},
-		{resourceName + "-session", hosts.Session, sessionServicePort},
 		{resourceName + hostSuffixReport, hosts.Report, reportServicePort},
 	}
 	for _, rt := range routes {

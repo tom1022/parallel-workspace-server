@@ -1,14 +1,18 @@
 # ワークスペース用ベースイメージ (design.md Platform Manifests / 15.1, 15.2)。
 #
+# 環境固有の値を一切含めない。ここに入るのは実行環境を問わない道具立てだけで、
+# 認証局・ホスト名・利用者に紐づく値はすべて実行時に Pod へ供給する。
+#
 # ビルド・push はこのリポジトリの範囲外 (CI 非稼働の Gitea リモートのため手動運用)。
 # ビルドコンテキストは apps/devplatform: Session Supervisor を supervisor/ から
 # ビルドするため、image/workspace ではコンテキストが足りない。
+#   TAG=$(date +%Y%m%d)-$(git rev-parse --short HEAD)
 #   docker build -f apps/devplatform/image/workspace/Dockerfile \
-#     -t <registry>/<repo>/workspace:$(date +%Y%m%d)-$(git rev-parse --short HEAD) \
-#     apps/devplatform
-#   docker push <registry>/<repo>/workspace:<same tag>
-#   docker inspect --format '{{index .RepoDigests 0}}' <registry>/<repo>/workspace:<same tag>
-# 得られた digest を values.yaml の workspaceImage.digest / workspaceTemplate.image へ設定する。
+#     -t ghcr.io/tom1022/devplatform-workspace:$TAG apps/devplatform
+#   docker push ghcr.io/tom1022/devplatform-workspace:$TAG
+#   docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/tom1022/devplatform-workspace:$TAG
+# 得られた digest を values.yaml の workspaceImage.digest へ設定する
+# (workspaceTemplate 実体の参照はそこから組み立てられる)。
 # タグは日付+短縮コミットSHAの組み合わせのみを使い、latest 等の可変タグは push しない (15.2)。
 
 FROM golang:1.26-alpine AS supervisor-build
@@ -25,12 +29,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 # curl/ca-certificates/gnupg: Node.js セットアップスクリプトと Playwright の取得に必要。
 # Python3/pip: マイグレーションツールを個別に決め打ちしない汎用ランタイムの片方。実際の
 # マイグレーションコマンド (node-pg-migrate 等) は対象リポジトリ側のスクリプトに委ねる。
+# openssh-server: 統合開発環境からの任意経路 (4.7)。証明書認証のみを受け付ける設定は
+# 払い出しごとに principal が変わり、信頼する認証局もクラスタごとに異なるため、
+# Session Supervisor が起動時に生成する (supervisor/internal/session/sshd.go)。
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         tmux \
         curl \
         ca-certificates \
         gnupg \
+        openssh-server \
         python3 \
         python3-pip \
     && rm -rf /var/lib/apt/lists/*
@@ -63,3 +71,10 @@ ENV DEVPLATFORM_CHROMIUM_ARGS="--disable-dev-shm-usage"
 COPY --from=supervisor-build /out/supervisor /usr/local/bin/supervisor
 
 WORKDIR /workspace
+
+# SSH で入ったセッションと Claude Code のセッションは同一ユーザ (root) で動く。ホーム
+# ディレクトリを永続ボリュームのマウント点へ移すことで、VS Code Server が展開する
+# .vscode-server が (ノードの一時領域ではなく) ワークスペースの資源予算の内側に載り、
+# かつ作業ディレクトリ /workspace/repo の外に出るのでブランチの差分を汚さない。
+# usermod は root が PID 1 に使われているビルドレイヤーで拒否されるため、passwd を直接書く。
+RUN sed -i '/^root:/s|:/root:|:/workspace:|' /etc/passwd

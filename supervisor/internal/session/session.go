@@ -52,6 +52,8 @@ type Supervisor struct {
 	Tmux      *Tmux
 	ConfigDir string
 	OutputLog string
+	// SSHPort is the port SSHEndpoint listens on; zero means DefaultSSHPort.
+	SSHPort int
 
 	mu      sync.RWMutex
 	failure string
@@ -130,6 +132,19 @@ func (s *Supervisor) ListClients() ([]SessionClient, error) {
 		return []SessionClient{}, nil
 	}
 	return clients, nil
+}
+
+// SSHSessionCount publishes how many SSH sessions hold this workspace, so the
+// Workspace Controller can fold them into idle detection from its own
+// reconcile loop (4.8). It is exposed as readable state rather than pushed:
+// the dependency runs Control Plane -> Workspace Runtime, and the supervisor
+// never writes the Workspace's status itself.
+func (s *Supervisor) SSHSessionCount() (int, error) {
+	port := s.SSHPort
+	if port == 0 {
+		port = DefaultSSHPort
+	}
+	return SSHSessions(port)
 }
 
 // TurnState reports where the session stands in the current turn (2.9, 2.10).

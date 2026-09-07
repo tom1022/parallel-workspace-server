@@ -24,6 +24,12 @@ type Snapshot struct {
 	SizeBytes       int64  `json:"sizeBytes"`
 }
 
+// editorServerDir is what the IDE route's editor server unpacks into the
+// working directory while a developer is connected (4.10). It is reinstalled
+// by the next connection and is not the branch's work, so it is never
+// collected.
+const editorServerDir = ".vscode-server"
+
 // Keys are fixed per workspace: an evacuation overwrites the previous one
 // rather than accumulating generations (16.7), so restore never has to pick
 // between candidates.
@@ -168,7 +174,11 @@ func dirtyPaths(out string) []string {
 		if rec[0] == 'R' || rec[0] == 'C' {
 			i++
 		}
-		paths = append(paths, rec[3:])
+		name := rec[3:]
+		if strings.HasPrefix(name, editorServerDir+"/") {
+			continue
+		}
+		paths = append(paths, name)
 	}
 	return paths
 }

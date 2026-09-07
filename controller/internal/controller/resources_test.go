@@ -66,8 +66,22 @@ func TestBuildStatefulSet_WorkspaceRunsSessionSupervisor(t *testing.T) {
 		t.Errorf("CLAUDE_AUTH_FILE = %q", env["CLAUDE_AUTH_FILE"])
 	}
 
-	if len(c.Ports) != 1 || c.Ports[0].ContainerPort != supervisorPort {
+	// 4.11: the principal the workspace's sshd accepts is its own identifier,
+	// which is the same string the gateway signs certificates for.
+	if env["WORKSPACE_ID"] != "feature-supervisor" {
+		t.Errorf("WORKSPACE_ID = %q, want the workspace identifier the SSH principal is checked against", env["WORKSPACE_ID"])
+	}
+
+	ports := map[string]int32{}
+	for _, p := range c.Ports {
+		ports[p.Name] = p.ContainerPort
+	}
+	if ports["supervisor"] != supervisorPort {
 		t.Errorf("ports = %+v, want the supervisor control API on %d", c.Ports, supervisorPort)
+	}
+	// 4.7: the IDE route reaches this port over the private network.
+	if ports["ssh"] != sshPort {
+		t.Errorf("ports = %+v, want the workspace SSH endpoint on %d", c.Ports, sshPort)
 	}
 }
 
@@ -277,5 +291,171 @@ func TestBuildStatefulSet_InitContainerRestoresEvacuatedWork(t *testing.T) {
 		if src == nil || src.SecretKeyRef == nil {
 			t.Fatalf("init %s must come from a Secret", name)
 		}
+	}
+}
+
+// 8.8: the branch's own database has to reach the processes in the working
+// directory as environment, and the client certificate CNPG issues for the
+// branch role has to be on disk for them to authenticate with.
+func TestBuildStatefulSet_PassesTheBranchDatabaseToTheWorkspace(t *testing.T) {
+	ws := &devplatformv1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "ws-db-env", Namespace: "devplatform-workspaces"},
+		Spec:       devplatformv1alpha1.WorkspaceSpec{Repository: "https://example.com/r.git", Branch: "feature/x", TemplateRef: "default"},
+	}
+	tmpl := &devplatformv1alpha1.WorkspaceTemplate{
+		Spec: devplatformv1alpha1.WorkspaceTemplateSpec{
+			Image:     "busybox",
+			Resources: devplatformv1alpha1.WorkspaceResources{Requests: devplatformv1alpha1.ResourceList{CPU: "1", Memory: "1Gi"}, Limits: devplatformv1alpha1.ResourceList{CPU: "2", Memory: "2Gi"}},
+			Auth:      devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
+			Database:  devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
+		},
+	}
+
+	sts, err := buildStatefulSet(ws, tmpl, "ws-db-env-abcd")
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+
+	env := map[string]string{}
+	for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e.Value
+	}
+	if got, want := env["PGDATABASE"], "ws-db-env-abcd"; got != want {
+		t.Errorf("PGDATABASE = %q, want the branch database %q", got, want)
+	}
+	if got, want := env["PGUSER"], "ws-db-env-abcd"; got != want {
+		t.Errorf("PGUSER = %q, want the branch role %q", got, want)
+	}
+	if got, want := env["PGHOST"], "devplatform-db-rw.devplatform-workspaces.svc.cluster.local"; got != want {
+		t.Errorf("PGHOST = %q, want %q", got, want)
+	}
+	if env["PGPORT"] == "" {
+		t.Error("PGPORT is unset")
+	}
+	if !strings.HasPrefix(env["DATABASE_URL"], "postgresql://ws-db-env-abcd@") {
+		t.Errorf("DATABASE_URL = %q, want a libpq URI for the branch role", env["DATABASE_URL"])
+	}
+	for _, name := range []string{"PGSSLCERT", "PGSSLKEY"} {
+		if !strings.HasPrefix(env[name], databaseCertMountPath+"/") {
+			t.Errorf("%s = %q, want a path under the mounted client certificate", name, env[name])
+		}
+	}
+
+	var mounted bool
+	for _, m := range sts.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == databaseCertMountPath {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Errorf("the client certificate is not mounted at %s", databaseCertMountPath)
+	}
+
+	for _, v := range sts.Spec.Template.Spec.Volumes {
+		if v.Name != databaseCertVolumeName {
+			continue
+		}
+		if v.Secret == nil || v.Secret.SecretName != "ws-db-env-abcd-client-cert" {
+			t.Fatalf("client certificate volume = %+v, want CNPG's <role>-client-cert Secret", v.Secret)
+		}
+		// libpq refuses a private key any wider than 0600.
+		if v.Secret.DefaultMode == nil || *v.Secret.DefaultMode != 0o600 {
+			t.Errorf("client certificate mode = %v, want 0600", v.Secret.DefaultMode)
+		}
+		return
+	}
+	t.Errorf("no %q volume on the Pod", databaseCertVolumeName)
+}
+
+// 8.5: the schema is applied before Claude Code is handed the branch, and
+// after the checkout that carries the repository's declaration of how.
+func TestBuildStatefulSet_BootstrapsTheDatabaseAfterTheCheckout(t *testing.T) {
+	ws, tmpl := supervisorTestWorkspace()
+	ws.Namespace = "devplatform-workspaces"
+	tmpl.Spec.Database = devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"}
+
+	sts, err := buildStatefulSet(ws, tmpl, "feature-supervisor")
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+
+	inits := sts.Spec.Template.Spec.InitContainers
+	if len(inits) != 2 {
+		t.Fatalf("init containers = %d, want the checkout followed by the database bootstrap", len(inits))
+	}
+	if inits[0].Name != "workspace-init" {
+		t.Errorf("first init container = %q, want the checkout to run first", inits[0].Name)
+	}
+	boot := inits[1]
+	if len(boot.Command) != 2 || boot.Command[0] != supervisorBinaryPath || boot.Command[1] != "dbboot" {
+		t.Errorf("bootstrap command = %v, want %q dbboot", boot.Command, supervisorBinaryPath)
+	}
+
+	env := map[string]string{}
+	for _, e := range boot.Env {
+		env[e.Name] = e.Value
+	}
+	if env["WORKSPACE_DIR"] != workingDirPath {
+		t.Errorf("bootstrap WORKSPACE_DIR = %q, it cannot read the declaration without the checkout path", env["WORKSPACE_DIR"])
+	}
+	if env["CLAUDE_CONFIG_DIR"] != claudeConfigPath {
+		t.Errorf("bootstrap CLAUDE_CONFIG_DIR = %q, it has nowhere to record an unusable workspace", env["CLAUDE_CONFIG_DIR"])
+	}
+	if env["PGDATABASE"] == "" {
+		t.Error("bootstrap PGDATABASE is unset")
+	}
+}
+
+// 4.11: the workspace's sshd trusts one certificate authority, and the base
+// image must stay usable in a cluster that has a different one — so the key
+// arrives as a mounted Secret rather than baked in. The mount is optional: a
+// cluster with no authority key loses the IDE route only, and the browser
+// route (4.3) still has to come up.
+func TestBuildStatefulSet_TrustsTheAuthorityKeySuppliedAtRuntime(t *testing.T) {
+	ws, tmpl := supervisorTestWorkspace()
+
+	sts, err := buildStatefulSet(ws, tmpl, "feature-supervisor")
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+	c := sts.Spec.Template.Spec.Containers[0]
+
+	env := map[string]string{}
+	for _, e := range c.Env {
+		env[e.Name] = e.Value
+	}
+	wantPath := sshCAMountPath + "/" + sshCAPublicKeyKey
+	if env["SSH_CA_PUBLIC_KEY"] != wantPath {
+		t.Errorf("SSH_CA_PUBLIC_KEY = %q, want %q", env["SSH_CA_PUBLIC_KEY"], wantPath)
+	}
+
+	var mounted bool
+	for _, m := range c.VolumeMounts {
+		if m.Name == sshCAVolumeName {
+			mounted = true
+			if m.MountPath != sshCAMountPath || !m.ReadOnly {
+				t.Errorf("ssh ca mount = %+v, want read-only at %q", m, sshCAMountPath)
+			}
+		}
+	}
+	if !mounted {
+		t.Errorf("volumeMounts = %+v, want the certificate authority key mounted", c.VolumeMounts)
+	}
+
+	var found bool
+	for _, v := range sts.Spec.Template.Spec.Volumes {
+		if v.Name != sshCAVolumeName {
+			continue
+		}
+		found = true
+		if v.Secret == nil || v.Secret.SecretName != sshCAPublicKeySecretName {
+			t.Fatalf("ssh ca volume = %+v, want Secret %q", v, sshCAPublicKeySecretName)
+		}
+		if v.Secret.Optional == nil || !*v.Secret.Optional {
+			t.Errorf("ssh ca volume is required; a missing authority key must not keep the Pod from starting")
+		}
+	}
+	if !found {
+		t.Errorf("volumes = %+v, want the certificate authority key volume", sts.Spec.Template.Spec.Volumes)
 	}
 }

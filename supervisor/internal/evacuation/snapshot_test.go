@@ -224,6 +224,31 @@ func TestEvacuateArchivesUncommittedChangesOnly(t *testing.T) {
 	}
 }
 
+// The IDE route's editor server installs itself under the working directory
+// while a developer is connected. It is reinstalled by the next connection and
+// is not the branch's work, so it never travels off-node.
+func TestEvacuateSkipsTheEditorServer(t *testing.T) {
+	workingDir, _ := newRepo(t)
+	write(t, workingDir, ".vscode-server/bin/abc/server.js", "editor\n")
+	write(t, workingDir, ".vscode-server/data/Machine/settings.json", "{}\n")
+	write(t, workingDir, "kept.txt", "work\n")
+
+	store, fake := newFakeStore(t)
+	if _, err := (&Agent{WorkingDir: workingDir, WorkspaceId: "ws-abc", Store: store}).Evacuate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := archiveEntries(t, fake.objects[DirtyArchiveKey("ws-abc")])
+	if _, ok := entries["kept.txt"]; !ok {
+		t.Errorf("archive lost the branch's own change: %v", entries)
+	}
+	for name := range entries {
+		if strings.HasPrefix(name, ".vscode-server/") {
+			t.Errorf("archive holds an editor server file %q", name)
+		}
+	}
+}
+
 func TestEvacuateSkipsDeletedFilesWithoutFailing(t *testing.T) {
 	workingDir, _ := newRepo(t)
 	if err := os.Remove(filepath.Join(workingDir, "README.md")); err != nil {

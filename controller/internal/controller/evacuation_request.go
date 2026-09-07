@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
@@ -47,7 +46,7 @@ type SupervisorEvacuationRequester struct {
 }
 
 func (s *SupervisorEvacuationRequester) RequestEvacuation(ctx context.Context, ws *devplatformv1alpha1.Workspace) (*devplatformv1alpha1.EvacuationSnapshot, error) {
-	ip, err := s.podIP(ctx, ws)
+	ip, err := runningPodIP(ctx, s.Client, ws)
 	if err != nil {
 		return nil, err
 	}
@@ -79,20 +78,6 @@ func (s *SupervisorEvacuationRequester) RequestEvacuation(ctx context.Context, w
 		return nil, fmt.Errorf("devplatform: decoding evacuation snapshot: %w", err)
 	}
 	return &snap, nil
-}
-
-func (s *SupervisorEvacuationRequester) podIP(ctx context.Context, ws *devplatformv1alpha1.Workspace) (string, error) {
-	var pods corev1.PodList
-	if err := s.Client.List(ctx, &pods, client.InNamespace(ws.Namespace), client.MatchingLabels(workspaceLabels(ws))); err != nil {
-		return "", err
-	}
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		if pod.Status.Phase == corev1.PodRunning && pod.Status.PodIP != "" && pod.DeletionTimestamp.IsZero() {
-			return pod.Status.PodIP, nil
-		}
-	}
-	return "", fmt.Errorf("devplatform: no running Pod for workspace %s to evacuate from", ws.Name)
 }
 
 func (s *SupervisorEvacuationRequester) httpClient() *http.Client {

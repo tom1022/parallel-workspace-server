@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,8 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tom1022/gitops-apps/apps/devplatform/supervisor/internal/dbboot"
 	"github.com/tom1022/gitops-apps/apps/devplatform/supervisor/internal/evacuation"
+	"github.com/tom1022/gitops-apps/apps/devplatform/supervisor/internal/repocfg"
 	"github.com/tom1022/gitops-apps/apps/devplatform/supervisor/internal/session"
+	"github.com/tom1022/gitops-apps/apps/devplatform/supervisor/internal/testrun"
 )
 
 const (
@@ -49,6 +53,31 @@ const (
 	// pastes into it; input arriving earlier is dropped without a trace.
 	authProbeSettle = 10 * time.Second
 
+	defaultDatabasePort = "5432"
+
+	// databaseWait bounds the branch instance's start. CNPG has already made
+	// kubelet hold this container until the branch role's certificate exists,
+	// so what is left is the instance answering.
+	databaseWait         = 5 * time.Minute
+	databasePollInterval = 2 * time.Second
+
+	// eventDatabaseBootstrapFailed tells Hermes Agent the branch never got a
+	// usable schema (8.7).
+	eventDatabaseBootstrapFailed = "DatabaseBootstrapFailed"
+
+	// testRunPollInterval paces the watch for the completed turns that trigger
+	// a test run (9.1).
+	testRunPollInterval = 5 * time.Second
+
+	// fixRequestTimeout bounds one self-healing turn. It is generous because
+	// the turn it waits on is a real implementation task, not a probe; the
+	// loop's bound on wasted work is the attempt limit, not this.
+	fixRequestTimeout = 30 * time.Minute
+
+	// testArtifactDir sits beside the working directory rather than inside it,
+	// so run artifacts never show up as changes in the branch under test.
+	testArtifactDir = "testruns"
+
 	// The identity every workspace commits under, so autonomous work stays
 	// distinguishable from a developer's own commits in the history (20.2).
 	defaultCommitAuthorName  = "devplatform"
@@ -67,6 +96,12 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "restore" {
 		if err := restore(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "dbboot" {
+		if err := bootstrapDatabase(); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -103,6 +138,55 @@ func restore() error {
 		return nil
 	}
 	return agent.Restore(context.Background())
+}
+
+// bootstrapDatabase applies the branch database's schema and seed data before
+// the session container starts (8.5, 8.6).
+//
+// A failure is not this process's to escalate: exiting non-zero would put the
+// Pod in a restart loop where nothing can serve the reason. It instead marks
+// the workspace unusable and notifies Hermes Agent (8.7), and lets the
+// workspace come up so that mark is readable.
+func bootstrapDatabase() error {
+	workingDir := workingDirFromEnv()
+	_, defaultConfigDir, _ := session.Paths(env("WORKSPACE_MOUNT", defaultMountRoot))
+	configDir := env("CLAUDE_CONFIG_DIR", defaultConfigDir)
+
+	cfg, err := repocfg.Load(workingDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		return err
+	}
+
+	boot := &dbboot.Bootstrap{
+		WorkingDir: workingDir,
+		Config:     cfg,
+		Addr:       net.JoinHostPort(os.Getenv("PGHOST"), env("PGPORT", defaultDatabasePort)),
+		Wait:       databaseWait,
+		Poll:       databasePollInterval,
+		SeedMarker: filepath.Join(configDir, "db-seeded"),
+	}
+	health := &session.Health{ConfigDir: configDir, Source: "dbboot"}
+	if err := boot.Run(context.Background()); err != nil {
+		detail := err.Error()
+		log.Printf("database bootstrap failed, workspace marked unusable: %v", err)
+		health.MarkUnusable(detail)
+		if err := session.NotifyHermes(env("HERMES_NOTIFY_URL", ""), session.Event{
+			Kind:      eventDatabaseBootstrapFailed,
+			Workspace: env("WORKSPACE_NAME", ""),
+			Detail:    detail,
+		}); err != nil {
+			log.Printf("notifying hermes failed: %v", err)
+		}
+		return nil
+	}
+	// A restart that gets the schema in place withdraws the previous
+	// container's verdict, so a transient database outage does not leave the
+	// workspace permanently unusable.
+	health.ClearUnusable()
+	return nil
 }
 
 // workingDirFromEnv resolves the same working directory the init container and
@@ -192,10 +276,16 @@ func serve() error {
 		return err
 	}
 
+	healer, err := newHealingLoop(sup, mountRoot, workingDir, workspace, hermesURL)
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go watchProcess(ctx, sup, workspace, hermesURL)
-	go probeAuth(sup, health, workspace, hermesURL)
+	go serveSSH(ctx, mountRoot, env("WORKSPACE_ID", workspace))
+	go probeAuth(ctx, sup, health, healer, workspace, hermesURL)
 	go evacuator.WatchTurns(ctx, func(err error) {
 		log.Printf("evacuation after turn failed: %v", err)
 	})
@@ -239,11 +329,26 @@ func serve() error {
 	return nil
 }
 
+// serveSSH runs the optional IDE route (4.7). It is optional in the strict
+// sense: a workspace with no certificate authority key mounted keeps serving
+// the browser route, which is the one that must always work (4.3), and only
+// loses the IDE route.
+func serveSSH(ctx context.Context, mountRoot, workspaceID string) {
+	endpoint := &session.SSHEndpoint{
+		WorkspaceID: workspaceID,
+		StateDir:    session.SSHStateDir(mountRoot),
+		CAPublicKey: env("SSH_CA_PUBLIC_KEY", session.DefaultCAPublicKey),
+	}
+	if err := endpoint.Run(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("ssh endpoint unavailable: %v", err)
+	}
+}
+
 // probeAuth runs the one-shot authentication check once the session is up
 // (5.7). It runs in the background so a slow or failed probe does not keep the
 // control API from serving — a caller has to be able to read /health to learn
 // the workspace is unusable.
-func probeAuth(sup *session.Supervisor, health *session.Health, workspace, hermesURL string) {
+func probeAuth(ctx context.Context, sup *session.Supervisor, health *session.Health, healer *testrun.Loop, workspace, hermesURL string) {
 	err := session.AuthProbe(sup, health, session.ProbeConfig{
 		Prompt:    authProbePrompt,
 		Timeout:   authProbeTimeout,
@@ -260,6 +365,77 @@ func probeAuth(sup *session.Supervisor, health *session.Health, workspace, herme
 	// nothing to do with the work that follows (7.16).
 	if err := sup.ReleaseContext(); err != nil {
 		log.Printf("releasing probe context failed: %v", err)
+	}
+	if healer == nil {
+		return
+	}
+	// Started here rather than beside the other watchers so the probe's own
+	// completed turn lands in the baseline: a workspace must not answer its
+	// authentication check by running the suite, and one that failed the check
+	// must not run it at all.
+	healer.Watch(ctx, func(err error) {
+		log.Printf("self-healing run failed: %v", err)
+	})
+}
+
+// newHealingLoop builds the test runner and its self-healing loop from the
+// repository's own declaration. A repository that declares no suites gets no
+// loop: every run would be a no-op that still reported a verdict.
+func newHealingLoop(sup *session.Supervisor, mountRoot, workingDir, workspace, hermesURL string) (*testrun.Loop, error) {
+	// ponytail: read once at startup, so a declaration the session adds or
+	// edits later takes effect on the next restart. Reload per run if that
+	// turns out to matter.
+	cfg, err := repocfg.Load(workingDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.UnitTest) == 0 && len(cfg.E2ETest) == 0 {
+		log.Print("no test suites declared, self-healing disabled")
+		return nil, nil
+	}
+
+	return &testrun.Loop{
+		Runner: &testrun.Runner{
+			WorkingDir:   workingDir,
+			Config:       cfg,
+			ArtifactRoot: filepath.Join(mountRoot, testArtifactDir),
+		},
+		Publisher: newReportPublisher(),
+		Turn:      turnReader(sup),
+		Request: func(_ context.Context, prompt string) error {
+			return session.Request(sup, "self-healing", prompt, fixRequestTimeout, testRunPollInterval)
+		},
+		Notify: func(kind, detail string) {
+			if err := session.NotifyHermes(hermesURL, session.Event{
+				Kind:      kind,
+				Workspace: workspace,
+				Detail:    detail,
+			}); err != nil {
+				log.Printf("notifying hermes failed: %v", err)
+			}
+		},
+		Poll: testRunPollInterval,
+	}, nil
+}
+
+// newReportPublisher returns nil when no report destination is configured,
+// which leaves runs unpublished rather than failing them.
+func newReportPublisher() *testrun.Publisher {
+	endpoint := os.Getenv("REPORT_ENDPOINT")
+	baseURL := os.Getenv("REPORT_BASE_URL")
+	if endpoint == "" || baseURL == "" {
+		return nil
+	}
+	return &testrun.Publisher{
+		Store: &evacuation.S3{
+			Endpoint:  endpoint,
+			Bucket:    os.Getenv("REPORT_BUCKET"),
+			Region:    env("REPORT_REGION", "garage"),
+			AccessKey: os.Getenv("REPORT_ACCESS_KEY"),
+			SecretKey: os.Getenv("REPORT_SECRET_KEY"),
+		},
+		WorkspaceId:   env("WORKSPACE_ID", os.Getenv("WORKSPACE_NAME")),
+		PublicBaseURL: baseURL,
 	}
 }
 

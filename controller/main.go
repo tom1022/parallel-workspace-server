@@ -59,7 +59,11 @@ func main() {
 		// credentials; this side only asks for it and records the result.
 		EvacuationRequester: &controller.SupervisorEvacuationRequester{Client: mgr.GetClient()},
 		EvacuationConfirmer: controller.StatusEvacuationConfirmer{},
-		Notify:              controller.HermesNotifier(os.Getenv("HERMES_NOTIFY_URL")),
+		// Idle detection reads the SSH session count from the workspace
+		// instead of the workspace reporting it: the dependency has to run
+		// Control Plane -> Workspace Runtime (4.8).
+		SSHSessionCounter: &controller.SupervisorSSHSessionCounter{Client: mgr.GetClient()},
+		Notify:            controller.HermesNotifier(os.Getenv("HERMES_NOTIFY_URL")),
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create Workspace controller")
 		os.Exit(1)

@@ -81,6 +81,12 @@ type WorkspaceReconciler struct {
 	// must not read as "nothing to evacuate".
 	EvacuationRequester EvacuationRequester
 
+	// SSHSessionCounter reads the SSH session count the workspace Pod's
+	// Session Supervisor publishes, so idle detection sees the IDE route as
+	// well as the browser one (4.8). Unset means SSH sessions are not
+	// consulted, which only ever makes a workspace easier to suspend.
+	SSHSessionCounter SSHSessionCounter
+
 	// Notify reports a condition a human has to act on. Unset is a no-op:
 	// chat relay is the platform's only notification path and losing it must
 	// not take reconciliation down with it.

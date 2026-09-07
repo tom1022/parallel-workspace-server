@@ -90,6 +90,15 @@ func (r *WorkspaceReconciler) reconcileReady(ctx context.Context, ws *devplatfor
 
 	idle := ws.Status.LastActivityAt != nil && r.now().Sub(ws.Status.LastActivityAt.Time) >= defaultIdleSuspendTimeout
 	requested := ws.Spec.DesiredPhase == devplatformv1alpha1.DesiredPhaseSuspended
+	// A developer holding the workspace — browser or SSH — keeps the clock at
+	// now, so the D-2 window only starts running once the last one leaves
+	// (4.8). An explicit suspend request is an operator decision rather than
+	// idle detection, and is not vetoed by a connection.
+	if !requested && r.connected(ctx, ws) {
+		now := metav1.NewTime(r.now())
+		ws.Status.LastActivityAt = &now
+		return ctrl.Result{RequeueAfter: idleCheckInterval}, r.Status().Update(ctx, ws)
+	}
 	if !idle && !requested {
 		return ctrl.Result{RequeueAfter: idleCheckInterval}, nil
 	}

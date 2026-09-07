@@ -67,6 +67,15 @@ func (s *Supervisor) Handler() http.Handler {
 		writeJSONResponse(w, http.StatusOK, s.InteractiveBrowserVerification())
 	})
 
+	mux.HandleFunc("GET /ssh-sessions", func(w http.ResponseWriter, r *http.Request) {
+		count, err := s.SSHSessionCount()
+		if err != nil {
+			writeJSONResponse(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSONResponse(w, http.StatusOK, map[string]int{"count": count})
+	})
+
 	mux.HandleFunc("GET /turn", func(w http.ResponseWriter, r *http.Request) {
 		state, err := s.TurnState()
 		if err != nil {
