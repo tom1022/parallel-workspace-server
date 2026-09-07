@@ -414,6 +414,24 @@ func (r *WorkspaceReconciler) failAndRollback(ctx context.Context, ws *devplatfo
 		if err := client.IgnoreNotFound(r.Delete(ctx, databaseRoleRef(ws.Namespace, resourceName))); err != nil {
 			return ctrl.Result{}, err
 		}
+		// Same reasoning for the routing, the shared document and the issued
+		// credential: they are OwnerReference-GC'd only when ws itself is
+		// deleted, and a rollback leaves ws alive in Failed.
+		for _, suffix := range []string{hostSuffixPreview, hostSuffixReport} {
+			if err := client.IgnoreNotFound(r.Delete(ctx, ingressRouteRef(ws.Namespace, resourceName+suffix))); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		if err := client.IgnoreNotFound(r.Delete(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: ClaudeMDConfigMapName(resourceName), Namespace: ws.Namespace},
+		})); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := client.IgnoreNotFound(r.Delete(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: ws.Namespace},
+		})); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	ws.Status.Phase = devplatformv1alpha1.WorkspacePhaseFailed
