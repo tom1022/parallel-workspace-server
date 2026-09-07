@@ -118,3 +118,42 @@ func TestDeriveResourceName_ReturnsErrorWhenUnresolvable(t *testing.T) {
 		t.Fatal("expected an error when no candidate name is free")
 	}
 }
+
+// Branches longer than a DNS label share their truncated base, so the
+// disambiguating suffix has to fit inside the label rather than extend past it.
+func TestDeriveResourceName_CollisionSuffixKeepsAValidDNSLabel(t *testing.T) {
+	base := strings.Repeat("a", 200)
+	claimed := map[string]bool{}
+	taken := func(name string) bool { return claimed[name] }
+
+	first, err := DeriveResourceName(base, taken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed[first] = true
+
+	second, err := DeriveResourceName(base+"/tail", taken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed[second] = true
+	third, err := DeriveResourceName(base+"/other", taken)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, got := range []string{second, third} {
+		if len(got) > 63 {
+			t.Errorf("name %q exceeds 63 chars (%d)", got, len(got))
+		}
+		if strings.HasPrefix(got, "-") || strings.HasSuffix(got, "-") {
+			t.Errorf("name %q must not start or end with '-'", got)
+		}
+		if got == first {
+			t.Errorf("name %q collides with the already claimed %q", got, first)
+		}
+	}
+	if second == third {
+		t.Errorf("distinct branches sharing a truncated base both got %q", second)
+	}
+}

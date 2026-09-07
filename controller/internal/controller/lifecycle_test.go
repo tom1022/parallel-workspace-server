@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -514,5 +515,63 @@ func TestReconcile_NotifiesWhenAReadyWorkspaceLosesItsNode(t *testing.T) {
 	}
 	if len(rec.kinds) != 1 || rec.kinds[0] != EventNodeUnavailable {
 		t.Fatalf("kinds = %v, want one %s", rec.kinds, EventNodeUnavailable)
+	}
+}
+
+// 1.6/13.7: a workspace that only mirrors another's substrate owns none of it,
+// so destroying it must leave the canonical workspace running.
+func TestReconcile_DestroyingAMirrorLeavesTheCanonicalSubstrate(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createTemplate(t, ctx, ns, "default")
+	branch := "feature/mirror-destroy"
+	resourceName := provisionToReady(t, ctx, ns, "ws-canonical", branch)
+
+	createWorkspace(t, ctx, ns, "ws-mirror", "https://gitea.fickledev.com/tom1022/demo.git", branch, "default")
+	mirrorReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ws-mirror", Namespace: ns}}
+	r := newTestReconciler()
+	if _, err := r.Reconcile(ctx, mirrorReq); err != nil {
+		t.Fatalf("reconcile ws-mirror: %v", err)
+	}
+
+	var mirror devplatformv1alpha1.Workspace
+	if err := testClient.Get(ctx, mirrorReq.NamespacedName, &mirror); err != nil {
+		t.Fatalf("get ws-mirror: %v", err)
+	}
+	if !meta.IsStatusConditionTrue(mirror.Status.Conditions, conditionDuplicateOfExisting) {
+		t.Fatalf("precondition: ws-mirror is not marked a duplicate: %+v", mirror.Status.Conditions)
+	}
+	if mirror.Status.WorkspaceId != resourceName {
+		t.Fatalf("precondition: ws-mirror workspaceId = %q, want the canonical's %q", mirror.Status.WorkspaceId, resourceName)
+	}
+
+	if err := testClient.Delete(ctx, &mirror); err != nil {
+		t.Fatalf("delete ws-mirror: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, mirrorReq); err != nil {
+		t.Fatalf("reconcile ws-mirror (terminating): %v", err)
+	}
+
+	var sts appsv1.StatefulSet
+	if err := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, &sts); err != nil {
+		t.Fatalf("canonical StatefulSet must survive the mirror's destruction: %v", err)
+	}
+	if !sts.DeletionTimestamp.IsZero() {
+		t.Error("canonical StatefulSet has a DeletionTimestamp after the mirror was destroyed")
+	}
+	var pvc corev1.PersistentVolumeClaim
+	if err := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, &pvc); err != nil {
+		t.Fatalf("canonical PVC must survive the mirror's destruction: %v", err)
+	}
+	if !pvc.DeletionTimestamp.IsZero() {
+		t.Error("canonical PVC has a DeletionTimestamp after the mirror was destroyed")
+	}
+
+	var canonical devplatformv1alpha1.Workspace
+	if err := testClient.Get(ctx, types.NamespacedName{Name: "ws-canonical", Namespace: ns}, &canonical); err != nil {
+		t.Fatalf("get ws-canonical: %v", err)
+	}
+	if canonical.Status.Phase != devplatformv1alpha1.WorkspacePhaseReady {
+		t.Errorf("canonical phase = %q, want it still Ready", canonical.Status.Phase)
 	}
 }

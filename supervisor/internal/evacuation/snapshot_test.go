@@ -331,3 +331,19 @@ func TestEvacuateRejectsUnconfiguredStore(t *testing.T) {
 		t.Fatal("expected an error when the destination is not configured")
 	}
 }
+
+// 16.7: both keys are derived from the workspace id alone, so an evacuation
+// overwrites its own predecessor and can never overwrite another workspace's.
+func TestSnapshotKeysAreScopedToTheWorkspace(t *testing.T) {
+	if BundleKey("ws-a") == BundleKey("ws-b") || DirtyArchiveKey("ws-a") == DirtyArchiveKey("ws-b") {
+		t.Fatalf("two workspaces share a key: %q / %q", BundleKey("ws-a"), DirtyArchiveKey("ws-a"))
+	}
+	if BundleKey("ws-a") == DirtyArchiveKey("ws-a") {
+		t.Fatal("bundle and dirty archive share a key; one would overwrite the other")
+	}
+	for _, key := range []string{BundleKey("ws-a"), DirtyArchiveKey("ws-a")} {
+		if !strings.HasPrefix(key, "workspace/ws-a/") {
+			t.Errorf("key %q is outside the workspace's own prefix", key)
+		}
+	}
+}

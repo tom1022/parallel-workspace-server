@@ -255,3 +255,28 @@ func TestSupervisorChangedFilesReporter_ReadsFromSupervisor(t *testing.T) {
 		t.Fatalf("files = %v, want [cmd/main.go]", files)
 	}
 }
+
+// 10.5's shared prefix only stays identical while every workspace renders the
+// entries in the same order, and the API's own listing order (by object name)
+// is not that order.
+func TestActiveBlackboardEntries_AreOrderedByBranch(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createTemplate(t, ctx, ns, "default")
+	provisionToReadyWithSummary(t, ctx, ns, "ws-bb-order-1", "feature/order-c", "c", "")
+	provisionToReadyWithSummary(t, ctx, ns, "ws-bb-order-2", "feature/order-a", "a", "")
+	provisionToReadyWithSummary(t, ctx, ns, "ws-bb-order-3", "feature/order-b", "b", "")
+
+	entries, err := ActiveBlackboardEntries(ctx, testClient, ns)
+	if err != nil {
+		t.Fatalf("ActiveBlackboardEntries: %v", err)
+	}
+	var branches []string
+	for _, e := range entries {
+		branches = append(branches, e.Branch)
+	}
+	want := []string{"feature/order-a", "feature/order-b", "feature/order-c"}
+	if !slices.Equal(branches, want) {
+		t.Errorf("branches = %v, want %v", branches, want)
+	}
+}

@@ -32,6 +32,7 @@ func TestExhaustedScope(t *testing.T) {
 		// Switching model cannot rescue a workspace whose account-wide window
 		// is gone, so the wider scope has to win.
 		{"model and session together", []UsageSnapshot{model, session}, QuotaScopeSession, true},
+		{"model and weekly together", []UsageSnapshot{model, weekly}, QuotaScopeWeekly, true},
 		{"inactive window is not a limit in effect", []UsageSnapshot{full, inactive}, "", false},
 		{"no reading at all", nil, "", false},
 	} {
