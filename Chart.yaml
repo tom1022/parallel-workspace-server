@@ -4,3 +4,4 @@ description: Autonomous parallel dev platform control plane and shared terminal 
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+kubeVersion: ">=1.31.0-0"
