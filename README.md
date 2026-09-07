@@ -19,6 +19,12 @@ StatefulSet・PVC・ブランチ専用データベース) はこの chart には
 | OIDC 認可サーバ + oauth2-proxy | ゲートウェイの認証 | `apps/kanidm/`, `apps/oauth2-proxy/` |
 | Tailscale operator (任意) | 統合開発環境からの任意経路 (経路 B) | `apps/tailscale-operator/` |
 
+Tailscale operator だけは `apps/argocd/applicationset.yaml` で exclude してあり、
+既定では Application が生成されない。operator は OAuth クライアント資格情報が無いと
+起動時に 401 で落ち続けるだけで待機しないため、tailnet を持たない配備先では
+常時 CrashLoop になる。任意経路を使う場合は下表の 2 キーを Infisical に登録してから
+この exclude を外す。
+
 `apps/devplatform-db` (ブランチ専用データベース) も併せて同期する。
 
 ## 利用者が用意するもの
@@ -31,7 +37,7 @@ StatefulSet・PVC・ブランチ専用データベース) はこの chart には
 |---|---|---|
 | `DEVPLATFORM_WORKSPACE_CLAUDE_CODE_CREDENTIALS` | Claude Code の長期認証情報 (`credentials.json` の内容そのまま) | 必須 |
 | `DEVPLATFORM_INFERENCE_API_KEY` | 推論バックエンドの API キー (Claude Code のサブスクリプション認証とは別系統) | 必須 |
-| `TAILSCALE_OPERATOR_OAUTH_CLIENT_ID` | tailnet 所有者が発行する OAuth クライアント | 任意経路のみ |
+| `TAILSCALE_OPERATOR_OAUTH_CLIENT_ID` | tailnet 所有者が発行する OAuth クライアント (管理コンソールでのみ発行でき、API からは発行できない) | 任意経路のみ |
 | `TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET` | 同上 | 任意経路のみ |
 
 秘匿情報以外に、配備先に合わせて `values.yaml` で調整するもの:
