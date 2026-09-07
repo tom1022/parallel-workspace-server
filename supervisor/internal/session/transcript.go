@@ -132,7 +132,7 @@ func advance(rec transcriptRecord) (TurnState, bool) {
 		case "end_turn", "stop_sequence", "max_tokens":
 			return TurnState{Kind: TurnCompleted, Model: rec.Message.Model, EndedAt: rec.Time}, true
 		case "tool_use":
-			return TurnState{Kind: TurnAwaitingTool, Reason: toolName(rec.Message.Content), StartedAt: rec.Time}, true
+			return TurnState{Kind: TurnAwaitingTool, Reason: toolName(rec.Message.Content), Model: rec.Message.Model, StartedAt: rec.Time}, true
 		}
 	}
 	return TurnState{}, false

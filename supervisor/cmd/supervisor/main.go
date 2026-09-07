@@ -34,6 +34,11 @@ const (
 
 	crashPollInterval = 2 * time.Second
 
+	// modelPollInterval paces the check that each turn ran on the configured
+	// model. A turn is minutes long, so the reading only has to be finer than
+	// that to catch every one.
+	modelPollInterval = 5 * time.Second
+
 	// evacuationPollInterval paces both the turn-completion watch and the
 	// settle wait an explicit evacuation request performs.
 	evacuationPollInterval = 5 * time.Second
@@ -284,6 +289,7 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go watchProcess(ctx, sup, workspace, hermesURL)
+	go watchModel(ctx, sup, workspace, hermesURL)
 	go serveSSH(ctx, mountRoot, env("WORKSPACE_ID", workspace))
 	go probeAuth(ctx, sup, health, healer, workspace, hermesURL)
 	go evacuator.WatchTurns(ctx, func(err error) {
@@ -484,6 +490,33 @@ func watchProcess(ctx context.Context, sup *session.Supervisor, workspace, herme
 			}
 		}
 	}
+}
+
+// watchModel reports a turn that ran on a model other than the one this
+// workspace was configured with (7.4). A workspace with no model pinned has no
+// expectation to check, so it runs no watch at all.
+func watchModel(ctx context.Context, sup *session.Supervisor, workspace, hermesURL string) {
+	expected := os.Getenv("ANTHROPIC_MODEL")
+	if expected == "" {
+		return
+	}
+	mon := &session.ModelMonitor{
+		Expected:  expected,
+		Workspace: workspace,
+		Turn:      sup.TurnState,
+		Notify: func(e session.Event) {
+			log.Print(e.Detail)
+			// Best-effort, as everywhere else: Hermes Agent has no inbound
+			// endpoint of its own and a lost notification must not stop the
+			// workspace.
+			if err := session.NotifyHermes(hermesURL, e); err != nil {
+				log.Printf("notifying hermes failed: %v", err)
+			}
+		},
+	}
+	mon.Watch(ctx, modelPollInterval, func(err error) {
+		log.Printf("model check failed: %v", err)
+	})
 }
 
 func env(name, fallback string) string {

@@ -204,3 +204,16 @@ func TestTurnStateFailedWithoutAnErrorObject(t *testing.T) {
 		t.Errorf("ErrorKind = %q, want empty", got.ErrorKind)
 	}
 }
+
+func TestTurnStateCarriesModelWhileParkedOnTool(t *testing.T) {
+	// A model switch takes effect on the next request, which may well be one
+	// that parks on a tool. Verification would miss it if only the record that
+	// ends the turn carried the model.
+	got, err := TurnStateFrom(writeTranscript(t, lineUserPrompt, lineToolUse))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Model != "claude-opus-5" {
+		t.Errorf("Model = %q, want %q", got.Model, "claude-opus-5")
+	}
+}
