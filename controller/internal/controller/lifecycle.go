@@ -104,6 +104,13 @@ func (r *WorkspaceReconciler) reconcileReady(ctx context.Context, ws *devplatfor
 		}
 	}
 
+	// 10.7: checked here rather than at a lifecycle edge for the same reason
+	// the entry is refreshed here — an overlap only appears once both sides
+	// have reported what they are changing.
+	if err := r.reconcileFileConflicts(ctx, ws); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	idle := ws.Status.LastActivityAt != nil && r.now().Sub(ws.Status.LastActivityAt.Time) >= defaultIdleSuspendTimeout
 	requested := ws.Spec.DesiredPhase == devplatformv1alpha1.DesiredPhaseSuspended
 	// A developer holding the workspace — browser or SSH — keeps the clock at
