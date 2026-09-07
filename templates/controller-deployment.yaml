@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: controller
-          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
+          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}{{ if .Values.controller.image.digest }}@{{ .Values.controller.image.digest }}{{ end }}"
           command:
             {{- toYaml .Values.controller.command | nindent 12 }}
           env:

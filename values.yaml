@@ -9,8 +9,9 @@
 # digest は取得でき次第 repository:tag@digest の形で不変参照に切り替える) に従う。
 controller:
   image:
-    repository: "REPLACE_WITH_REGISTRY/devplatform-controller"
-    tag: "REPLACE_WITH_DATE-SHORTSHA"
+    repository: "ghcr.io/tom1022/devplatform-controller"
+    tag: "20260906-d04297d"
+    digest: "sha256:31644003ac646b11a067f411c0b565b90234c4a1982f70a2c9712396411a67ce"
   command: ["/controller"]
   resources:
     requests:
@@ -30,17 +31,49 @@ controller:
 
 # Terminal Gateway (共有端末ゲートウェイ)。ホスト名解決を都度 Kubernetes API へ
 # 問い合わせるだけのステートレス構成のため永続データを持たない。
+# 共有端末ゲートウェイ (design.md "Terminal Gateway")。必須到達経路の常駐物はこの 1 つ
+# だけで、ワークスペースを増やしても増えない (4.3/4.4)。イメージは
+# apps/devplatform/gateway/Dockerfile が生成する。ビルド・push は controller と同じ手動運用。
 gateway:
   image:
-    repository: busybox
-    tag: "1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
-  command: ["sleep", "infinity"]
+    repository: "ghcr.io/tom1022/devplatform-gateway"
+    tag: "20260907-4542107"
+    digest: "sha256:58713fc8aca9313f4f1be542d4e4d318bcba59cb6d29d229e30fad24a5c29e71"
+  # ステートレスなので増やせるが、単一障害点の緩和は運用判断 (design.md の Risks)。
+  replicas: 1
+  port: 8080
+  # ワイルドカード証明書 tls-fickledev-com が適用されるゾーン。ホスト名は必ずこの直下の
+  # 単一ラベルにする (11.2)。
+  domain: fickledev.com
+  # /api/ 配下の受け口となるホスト名 (単一ラベル)。forward auth を挟まず Bearer を
+  # ゲートウェイまで素通しさせる対象をこのホスト名だけに限定する (4.12)。
+  apiHost: devworkspaces
+  # Bearer JWT の検証パラメータ。audience は Kanidm 側のクライアント識別子と一致させる。
+  # Kanidm はクライアントごとに異なる issuer URL を発行する (apps/oauth2-proxy 参照)。
+  oidc:
+    issuer: https://kanidm.fickledev.com/oauth2/openid/devplatform-gateway
+    audience: devplatform-gateway
+    jwksUrl: https://kanidm.fickledev.com/oauth2/openid/devplatform-gateway/public_key.jwk
+  # SSH 認証局。鍵ペアはゲートウェイが起動時にクラスタ内で確定させる (外部に発行元が
+  # 存在しないため配備時の手作業を要求しない)。秘密鍵はこのリリースのネームスペースに
+  # 留め、公開鍵だけをワークスペース専用ネームスペースへ書き出す。既に caSecretName の
+  # Secret がある場合は一切触らないため、自前の認証局を使いたい運用者はゲートウェイの
+  # 起動前にその Secret を置けばよい (infisical.sshCa.enabled も参照)。証明書は短命に
+  # 保ち、失効管理を発行時点で完結させる (4.11)。
+  ssh:
+    caSecretName: devplatform-gateway-ssh-ca
+    caKeySecretKey: id_ca
+    # controller の resources.go の sshCAPublicKeySecretName / sshCAPublicKeyKey と
+    # 一致させる。ワークスペース Pod がここから信頼する認証局を読む。
+    caPublicSecretName: devplatform-workspace-ssh-ca
+    caPublicSecretKey: ca.pub
+    certificateTtl: 5m
   resources:
     requests:
       cpu: "10m"
       memory: "64Mi"
     limits:
-      memory: "64Mi"
+      memory: "128Mi"
   nodeSelector:
     kubernetes.io/hostname: k3s-agent-z440
 
@@ -52,27 +85,34 @@ gateway:
 # 置くと同じ RBAC で参照できなくなる。
 workspaceNamespace: devplatform-workspaces
 
-# 既定の WorkspaceTemplate 実体 (GitOps 管理、17.4)。ベースイメージは
-# apps/devplatform/image/workspace/Dockerfile (後続タスク) が生成する不変タグに
-# 差し替えるまでの間、controller/gateway と同じプレースホルダを参照する。
-# database.clusterRef / auth.secretRef / evacuation.bucket は、いずれも本タスクの
-# 範囲外である apps/devplatform-db・Infisical Secret・Garage バケットの各後続タスクが
-# 実体を用意するまでの暫定名。
+# 統合開発環境からの任意経路 (4.7) の単一到達点である subnet router が居るネームスペース
+# (apps/tailscale-operator)。workspace-networkpolicy.yaml が、ワークスペース Pod の sshd へ
+# 到達してよい唯一の外部ネームスペースとして参照する。
+subnetRouterNamespace: tailscale-operator
+
+# 既定の WorkspaceTemplate 実体 (GitOps 管理、17.4)。払い出しに使うイメージ参照は
+# workspaceImage (下記) から組み立てる: 事前配置 (image-prestage-daemonset.yaml) と
+# 払い出しが同一の参照を指していないと、配置完了を前提とする払い出し条件 (15.4) が
+# 別のイメージについて成立してしまう。
 workspaceTemplate:
   name: default
-  image: "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+  # limits には統合開発環境が接続中にだけ立ち上がる VS Code Server の分 (1Gi) を含める
+  # (4.10)。requests には含めない: 編集用サーバは接続中のみ存在する非常駐物であり、
+  # 未接続のワークスペースにも予約させると同時払い出し数がその分だけ減る。
   resources:
     requests:
       cpu: "500m"
       memory: "1Gi"
     limits:
       cpu: "2"
-      memory: "4Gi"
+      memory: "5Gi"
   storage:
-    size: 20Gi
+    # 内訳: 作業ディレクトリ 20Gi + VS Code Server (.vscode-server と拡張機能) 2Gi。
+    # 後者は接続のたびに再取得させず永続ボリューム上に残すため、資源予算へ計上する。
+    size: 22Gi
     # nodeName の全ワークスペース合計に対するディスク予算 (15.11)。既定の workspaceQuota.maxPods
-    # (5) x size (20Gi) を賄える値。実測ではなく宣言値 (size) 合計での近似判定。
-    nodeDiskBudget: 100Gi
+    # (5) x size (22Gi) を賄える値。実測ではなく宣言値 (size) 合計での近似判定。
+    nodeDiskBudget: 110Gi
   nodeName: k3s-agent-z440
   priorityClassName: devplatform-workspace
   # 各ワークスペースの既定モデル (7.3)。空文字の間は Claude Code 自身の既定モデルを用いる。
@@ -84,9 +124,10 @@ workspaceTemplate:
     secretRef: devplatform-workspace-claude-auth
   evacuation:
     bucket: workspace
-    # 退避先 Garage の S3 資格情報。infisical-secret.yaml がワークスペース専用
-    # ネームスペースへ同期し、ワークスペース Pod が環境変数として読む。制御プレーンは
-    # 退避を依頼するだけで自ら S3 を叩かないため、この Secret を参照しない。
+    # 退避先の S3 資格情報を保持する Secret。既定では evacuationCredentials が
+    # クラスタ内 Garage の鍵を発行して作る。外部 S3 を使う運用者は autoProvision を
+    # 無効にし、同名の Secret を access-key / secret-key の 2 キーで自分で用意する。
+    # 制御プレーンは退避を依頼するだけで自ら S3 を叩かないため、この Secret を参照しない。
     secretRef: devplatform-workspace-evacuation
 
 # ワークスペース専用ネームスペースへの ResourceQuota (15.5)。既定値は保守的な小さめの値
@@ -98,6 +139,30 @@ workspaceQuota:
   requestsMemory: "4Gi"
   limitsCpu: "4"
   limitsMemory: "8Gi"
+
+# 退避先 S3 資格情報の自動発行 (16.7-16.9)。退避先がクラスタ内 Garage の場合、鍵の
+# 発行元は他に存在しないため配備時に作る。外部 S3 を使う場合は enabled: false にし、
+# workspaceTemplate.evacuation.secretRef の Secret を運用者が用意する
+# (infisical.evacuation.enabled を使えば Infisical から同期できる)。
+evacuationCredentials:
+  autoProvision:
+    enabled: true
+    # Bitnami の無料枠は latest のみ配布しバージョン別タグを持たないため
+    # ダイジェストで固定する (apps/garage の setup-job と同一)。
+    image: bitnami/kubectl@sha256:e0fcb25c485a8ad0665d0dd4b4a67cefb6baee32b0e3b19f54f1b468c49c1ed5
+    garage:
+      namespace: garage
+      podSelector: app=garage
+      configPath: /etc/garage.toml
+      # Garage 側の鍵の名前。Secret を消して作り直しても、この名前の鍵が残っていれば
+      # 同じ資格情報が復元され、既存の退避データへ到達し続ける。
+      keyName: devplatform-workspace-evacuation
+    resources:
+      requests:
+        cpu: "10m"
+        memory: "32Mi"
+      limits:
+        memory: "64Mi"
 
 # 秘匿情報の同期定義 (14.4/14.5)。projectId/environmentSlug/secretPath/authRef は
 # 他 Helm chart (apps/garage 等) と同じ全アプリ共通の Infisical プロジェクトを指し、
@@ -113,29 +178,34 @@ infisical:
   # サブスクリプション認証とは別系統の API キー。9.2 で実際に消費するコンポーネントが
   # 実装されるまでの間、参照定義のみを先行して用意する)。
   inferenceCredentialsSecretName: devplatform-inference-credentials
-  # devplatform-db (CNPG superuser) の資格情報を、apps/devplatform-db が Infisical から
-  # 同期する Secret とは別に、Workspace Controller と同じネームスペース (devplatform) にも
-  # 複製する。Kubernetes Secret はネームスペース境界を越えて参照できないため、Controller が
-  # 疎通確認等で直接必要とする場合に備えて同一の Infisical キーをここでも同期する。
-  dbCredentialsSecretName: devplatform-db-credentials
-  # 退避先 Garage バケットへの S3 アクセスキー。apps/garage が作成したバケットに対する
-  # 専用キーを Infisical 側に置き、ワークスペース専用ネームスペースへ同期する。
-  evacuationCredentialsSecretName: devplatform-workspace-evacuation
+  # 自動発行を使わず自前の値を持ち込むための経路。既定はいずれも無効で、対応する
+  # Secret はクラスタ内で発行される。有効にした場合は Infisical 側のキーが正となり、
+  # 自動発行側は既存 Secret を尊重して何もしない。
+  sshCa:
+    # DEVPLATFORM_SSH_CA_PRIVATE_KEY を gateway.ssh.caSecretName へ同期する。
+    # 公開鍵はゲートウェイが秘密鍵から導出して書き出すため登録不要。
+    enabled: false
+  evacuation:
+    # DEVPLATFORM_EVACUATION_ACCESS_KEY_ID / _SECRET_ACCESS_KEY を
+    # workspaceTemplate.evacuation.secretRef へ同期する。外部 S3 を使う場合の経路。
+    enabled: false
 
 # ワークスペース用ベースイメージ (apps/devplatform/image/workspace/Dockerfile, 15.1-15.3)。
-# image-prestage-daemonset.yaml が全ノードへの事前配置に、workspaceTemplate.image
-# (上記) が実際の払い出しに、それぞれこのイメージを参照する。ビルド・push はこのリポジトリの
-# 範囲外 (CI 非稼働) のため手動運用とし、tag は日付+短縮コミットSHA等の一意値のみを使い
-# latest を使わない (15.2)。digest はビルド後に `docker inspect --format
-# '{{index .RepoDigests 0}}'` 等で取得し、可能な限りこちらを不変参照の正とする
-# (repository:tag@digest の形でイメージ参照に付与される。未設定の間は tag のみで参照する)。
+# image-prestage-daemonset.yaml が全ノードへの事前配置に、workspacetemplate.yaml が
+# 実際の払い出しに、それぞれこの 1 か所を参照する。イメージ自体は環境中立で、公開
+# レジストリから誰でも pull できる (imagePullSecrets は不要。controller/gateway も同じ)。
+# ビルド・push はこのリポジトリの範囲外 (CI 非稼働) のため手動運用とし、tag は
+# 日付+短縮コミットSHA等の一意値のみを使い latest を使わない (15.2)。digest はビルド後に
+# `docker inspect --format '{{index .RepoDigests 0}}'` 等で取得し、可能な限りこちらを
+# 不変参照の正とする (repository:tag@digest の形でイメージ参照に付与される。
+# 未設定の間は tag のみで参照する)。
 workspaceImage:
-  repository: "REPLACE_WITH_REGISTRY/devplatform-workspace"
-  tag: "REPLACE_WITH_DATE-SHORTSHA"
+  repository: "ghcr.io/tom1022/devplatform-workspace"
+  tag: "20260906-d04297d"
   # 例: "sha256:0000000000000000000000000000000000000000000000000000000000000"
   # 空文字列の間は tag のみで参照し、ビルド後に digest を設定してから
   # workspaceTemplate.image もこのイメージ参照 (repository:tag@digest) に合わせて更新する。
-  digest: ""
+  digest: "sha256:dd6e9ee03a0a1b0a64118d6073a391c6c8b837a4298da693ba5feb2d8cce470d"
   # DaemonSet プレースホルダコンテナの requests/limits (15.7)。実処理を持たない sleep のみの
   # コンテナのため最小値で足りる。
   prestageResources:
