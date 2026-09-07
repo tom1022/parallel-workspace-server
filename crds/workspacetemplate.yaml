@@ -81,32 +81,28 @@ spec:
                 storage:
                   type: object
                   description: |
-                    作業ディレクトリ用 PVC。local-path は拡張不可のため size が事実上の上限(C-7)。
-                    接続中のみ存在する VS Code Server (.vscode-server) の分もこの容量に含める(4.10)。
-                  default:
-                    size: 22Gi
+                    作業ディレクトリ用 PVC。local-path 等ノード固定の StorageClass では
+                    size が事実上の上限(C-7)。接続中のみ存在する VS Code Server
+                    (.vscode-server) の分もこの容量に含める(4.10)。
                   properties:
                     size:
                       type: string
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
-                      default: 22Gi
                     nodeDiskBudget:
                       type: string
                       description: |
                         この nodeName へ配置された全ワークスペースの作業ディレクトリ容量 (size) 合計に対する上限
                         (15.11)。実測ディスク使用量ではなく宣言値の合計による近似。空文字は上限なしを意味する。
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
-                      default: 110Gi
                 nodeName:
                   type: string
                   description: |
-                    配置先ノード。local-path PVC はノード固定のためスケジューラ任せにせず明示指定する
+                    配置先ノード。省略時は配置制約を課さずスケジューラに任せる。
+                    ノード固定の StorageClass (local-path 等) を使う場合は明示指定する
                     (§ワークスペースの配置ノード)。払い出し後は変更できない。
-                  default: k3s-agent-z440
                 priorityClassName:
                   type: string
-                  description: 既存アプリより低い優先度クラス。ノード逼迫時にワークスペース側を先に退避対象とする (15.10)。
-                  default: devplatform-workspace
+                  description: ワークスペース Pod に適用する PriorityClass 名。ノード逼迫時の退避順位を決める (15.10)。
                 model:
                   type: string
                   description: |
