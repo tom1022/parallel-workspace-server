@@ -6,8 +6,7 @@
     "workspaceNamespace",
     "workspaceImage",
     "workspaceTemplate",
-    "taskQueue",
-    "infisical"
+    "taskQueue"
   ],
   "properties": {
     "gateway": {
@@ -116,17 +115,19 @@
     },
     "infisical": {
       "type": "object",
-      "required": ["projectId", "environmentSlug", "secretPath", "authRef"],
       "properties": {
-        "projectId": { "type": "string", "minLength": 1 },
-        "environmentSlug": { "type": "string", "minLength": 1 },
-        "secretPath": { "type": "string", "minLength": 1 },
+        "enabled": {
+          "type": "boolean",
+          "description": "Infisical Operator による秘匿情報同期を使うか (3.3)。既定 false では workspaceTemplate.auth.secretRef と infisical.inferenceCredentialsSecretName を利用者が用意した Secret 名として参照するだけになり、projectId 等の接続情報は不要。"
+        },
+        "projectId": { "type": "string" },
+        "environmentSlug": { "type": "string" },
+        "secretPath": { "type": "string" },
         "authRef": {
           "type": "object",
-          "required": ["name", "namespace"],
           "properties": {
-            "name": { "type": "string", "minLength": 1 },
-            "namespace": { "type": "string", "minLength": 1 }
+            "name": { "type": "string" },
+            "namespace": { "type": "string" }
           }
         }
       }
@@ -152,6 +153,38 @@
     }
   },
   "allOf": [
+    {
+      "$comment": "秘匿情報同期にInfisical Operatorを使う場合(infisical.enabled=true)、接続先プロジェクトの情報が要る(3.3)。",
+      "if": {
+        "properties": {
+          "infisical": {
+            "properties": { "enabled": { "const": true } },
+            "required": ["enabled"]
+          }
+        },
+        "required": ["infisical"]
+      },
+      "then": {
+        "properties": {
+          "infisical": {
+            "required": ["projectId", "environmentSlug", "secretPath", "authRef"],
+            "properties": {
+              "projectId": { "type": "string", "minLength": 1 },
+              "environmentSlug": { "type": "string", "minLength": 1 },
+              "secretPath": { "type": "string", "minLength": 1 },
+              "authRef": {
+                "type": "object",
+                "required": ["name", "namespace"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "namespace": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     {
       "$comment": "退避先S3資格情報の自動発行(3.4/3.7)を有効にした場合、発行対象のGarage情報が要る。",
       "if": {

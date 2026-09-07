@@ -37,7 +37,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | Ingress 用ルーティング実装 (現状 Traefik `IngressRoute` のみ対応) | ゲートウェイへの外部到達経路 | 必須 |
 | 証明書発行の仕組み (cert-manager 等) | `gateway.tls.secretName` の TLS 証明書 | 必須 |
 | OIDC 対応の認可サーバ | ゲートウェイの認証 (`gateway.oidc.*`) | 必須 |
-| Infisical Kubernetes Operator | 秘匿情報の同期 (`infisical.*`) | 必須 |
+| Infisical Kubernetes Operator | 秘匿情報の同期 (`infisical.*`) | 任意。既定 (`infisical.enabled: false`) では不要で、利用者が自分で用意した Secret を直接参照する |
 | ブランチ専用データベース (PostgreSQL 系。CloudNativePG 等) | ワークスペースごとの作業用 DB | 必須 (この chart には含まれない。利用者側で用意し `workspaceTemplate.database.clusterRef` で参照する) |
 | S3 互換オブジェクトストレージ (Garage 等) | 作業内容の退避先 | 必須。既定 (`evacuationCredentials.autoProvision.enabled: true`) はクラスタ内 Garage 前提で資格情報を自動発行する。外部 S3 を使う場合は無効化して自分で用意する |
 | Tailscale operator 等の VPN | 統合開発環境からの任意経路 | 任意。`subnetRouterNamespace` を設定した場合のみ経路が開く |
@@ -49,8 +49,9 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 ## 配備手順
 
 1. 上表の依存を配備する。
-2. Infisical のプロジェクトに、下表の利用者提供キーを登録する (値をリポジトリへ
-   置いてはならない)。
+2. 下表の利用者提供キーを用意する。Infisical Operator を使う (`infisical.enabled: true`)
+   ならそのプロジェクトへ登録し、使わない (既定) なら同名の Secret を自分で作成する
+   (値をリポジトリへ置いてはならない)。
 3. `values.yaml` を配備先に合わせて調整する (次節参照)。`helm template` で
    レンダリング結果を確認する。
 4. `helm install devplatform . -f <自分の values ファイル>` で配備する。
@@ -116,22 +117,26 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `workspaceQuota.*` | ワークスペース用ネームスペースの ResourceQuota | クラスタ数個分の保守的な値 | 省略可 |
 | `evacuationCredentials.autoProvision.enabled` | クラスタ内 Garage への退避資格情報自動発行 | `true` | 省略可 |
 | `evacuationCredentials.autoProvision.garage.*` | 自動発行が参照する Garage の namespace/Pod セレクタ/鍵名 | チャート既定値 | `autoProvision.enabled: true` の場合のみ必須 |
-| `infisical.projectId`/`environmentSlug`/`secretPath` | 秘匿情報同期元の Infisical プロジェクト | プロジェクト ID はなし | **必須** |
-| `infisical.authRef.name`/`namespace` | Infisical Operator の機械 ID (`InfisicalMachineIdentity`) 参照 | なし | **必須** |
-| `infisical.sshCa.enabled`/`evacuation.enabled` | SSH 認証局・退避資格情報を Infisical から同期するか | `false` (クラスタ内発行を使う) | 省略可 |
+| `infisical.enabled` | Infisical Operator による秘匿情報同期を使うか (3.3) | `false` (利用者が用意した Secret を `workspaceTemplate.auth.secretRef`/`infisical.inferenceCredentialsSecretName` として直接参照する) | 省略可 |
+| `infisical.projectId`/`environmentSlug`/`secretPath` | 秘匿情報同期元の Infisical プロジェクト | プロジェクト ID はなし | `infisical.enabled: true` の場合のみ必須 |
+| `infisical.authRef.name`/`namespace` | Infisical Operator の機械 ID (`InfisicalMachineIdentity`) 参照 | なし | `infisical.enabled: true` の場合のみ必須 |
+| `infisical.sshCa.enabled`/`evacuation.enabled` | SSH 認証局・退避資格情報を Infisical から同期するか | `false` (クラスタ内発行を使う) | 省略可。`infisical.enabled: true` の場合のみ意味を持つ |
 | `workspaceImage.repository`/`tag`/`digest` | ワークスペースベースイメージ参照 | 公開レジストリの既定イメージ | 省略可 |
 
 ## 利用者が用意する秘匿情報
 
-外部のアカウント・契約がないと発行できないものだけを、`infisical.*` で指す
-Infisical プロジェクトに登録する。値をリポジトリへ置いてはならない。
+外部のアカウント・契約がないと発行できないものだけが対象。既定 (`infisical.enabled: false`)
+では、下表の Secret 名 (`workspaceTemplate.auth.secretRef` 等) をワークスペース専用
+ネームスペース (または該当ネームスペース) に自分で作成する。`infisical.enabled: true`
+にした場合は代わりに `infisical.*` で指す Infisical プロジェクトへ下表のキーを登録する
+(いずれの経路でも値をリポジトリへ置いてはならない)。
 
-| Infisical のキー | 中身 | 必須 |
+| Secret 名 (既定経路) / Infisical のキー (Infisical 経路) | 中身 | 必須 |
 |---|---|---|
-| `DEVPLATFORM_WORKSPACE_CLAUDE_CODE_CREDENTIALS` | Claude Code の長期認証情報 (`credentials.json` の内容そのまま) | 必須 |
-| `DEVPLATFORM_INFERENCE_API_KEY` | 推論バックエンドの API キー (Claude Code のサブスクリプション認証とは別系統) | 必須 |
-| `DEVPLATFORM_SSH_CA_PRIVATE_KEY` | 自前の SSH 認証局を持ち込む場合の秘密鍵 | `infisical.sshCa.enabled: true` の場合のみ |
-| `DEVPLATFORM_EVACUATION_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | 外部 S3 を退避先にする場合の資格情報 | `infisical.evacuation.enabled: true` の場合のみ |
+| `workspaceTemplate.auth.secretRef` の Secret (`credentials.json`) / `DEVPLATFORM_WORKSPACE_CLAUDE_CODE_CREDENTIALS` | Claude Code の長期認証情報 (`credentials.json` の内容そのまま) | 必須 |
+| `infisical.inferenceCredentialsSecretName` の Secret (`api-key`) / `DEVPLATFORM_INFERENCE_API_KEY` | 推論バックエンドの API キー (Claude Code のサブスクリプション認証とは別系統) | 必須 |
+| `gateway.ssh.caSecretName` の Secret / `DEVPLATFORM_SSH_CA_PRIVATE_KEY` | 自前の SSH 認証局を持ち込む場合の秘密鍵 | `infisical.sshCa.enabled: true` の場合のみ Infisical 経路が使える。既定経路では常にこの Secret 自体が必須 (クラスタ内発行で自動的に満たされる) |
+| `workspaceTemplate.evacuation.secretRef` の Secret (`access-key`/`secret-key`) / `DEVPLATFORM_EVACUATION_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | 外部 S3 を退避先にする場合の資格情報 | `infisical.evacuation.enabled: true` の場合のみ Infisical 経路が使える |
 
 ## 自動で用意されるもの
 

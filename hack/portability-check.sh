@@ -77,7 +77,8 @@ required_value_missing_fails() {
   out="$(helm template devplatform . -f "$MINIMAL_VALUES" --set workspaceTemplate.database.clusterRef= 2>&1)" && return 1
   grep -q "clusterRef" <<<"$out" || return 1
 
-  out="$(helm template devplatform . -f "$MINIMAL_VALUES" --set infisical.projectId= 2>&1)" && return 1
+  out="$(helm template devplatform . -f "$MINIMAL_VALUES" \
+    --set infisical.enabled=true --set infisical.projectId= 2>&1)" && return 1
   grep -q "projectId" <<<"$out"
 }
 check "rendering fails and names the missing required value" required_value_missing_fails
@@ -89,7 +90,12 @@ conditional_dependency_missing_fails() {
   out="$(helm template devplatform . -f "$MINIMAL_VALUES" \
     --set evacuationCredentials.autoProvision.enabled=true \
     --set evacuationCredentials.autoProvision.garage.namespace= 2>&1)" && return 1
-  grep -q "namespace" <<<"$out"
+  grep -q "namespace" <<<"$out" || return 1
+
+  # Infisical Operator による同期を有効にしたが、接続先プロジェクトの情報がない場合 (3.3)。
+  out="$(helm template devplatform . -f "$MINIMAL_VALUES" \
+    --set infisical.enabled=true 2>&1)" && return 1
+  grep -q "projectId" <<<"$out"
 }
 check "enabling a feature without its required dependency fails rendering" conditional_dependency_missing_fails
 

@@ -222,10 +222,14 @@ evacuationCredentials:
       limits:
         memory: "64Mi"
 
-# 秘匿情報の同期定義 (14.4/14.5)。projectId/environmentSlug/secretPath/authRef は
-# 利用する Infisical プロジェクトを指し、この 1 箇所にのみ実体を置く。
-# infisical-secret.yaml が参照する。
+# 秘匿情報の同期定義 (14.4/14.5, 3.3)。既定 (enabled: false) では Infisical Operator
+# を必須とせず、workspaceTemplate.auth.secretRef と
+# infisical.inferenceCredentialsSecretName は利用者が自分で用意した Secret の名前
+# として参照するだけになる。true にした場合のみ、projectId/environmentSlug/
+# secretPath/authRef で指す Infisical プロジェクトから同期する
+# (infisical-secret.yaml が参照する)。
 infisical:
+  enabled: false
   projectId: ""
   environmentSlug: prod
   secretPath: "/"

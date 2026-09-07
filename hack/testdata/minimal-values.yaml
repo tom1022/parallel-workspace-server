@@ -8,5 +8,5 @@ gateway:
     issuer: https://idp.example.internal/oauth2
     audience: devplatform-gateway
     jwksUrl: https://idp.example.internal/oauth2/jwks
-infisical:
-  projectId: 00000000-0000-0000-0000-000000000000
+# infisical は既定 (enabled: false) のままにする。Infisical Operator を導入していない
+# クラスタでも成立することを最小構成として示す (3.3)。
