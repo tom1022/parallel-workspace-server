@@ -160,8 +160,8 @@ func TestBuildStatefulSet_InitScriptClearsStaleGitLocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildStatefulSet: %v", err)
 	}
-	if len(sts.Spec.Template.Spec.InitContainers) != 1 {
-		t.Fatalf("expected exactly 1 init container, got %d", len(sts.Spec.Template.Spec.InitContainers))
+	if got := sts.Spec.Template.Spec.InitContainers[0].Name; got != "workspace-init" {
+		t.Fatalf("first init container = %q, want the checkout", got)
 	}
 	cmd := sts.Spec.Template.Spec.InitContainers[0].Command
 	script := cmd[len(cmd)-1]

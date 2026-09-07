@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -67,6 +69,13 @@ func (c *S3) PutFile(ctx context.Context, key, path string) (int64, error) {
 		return 0, err
 	}
 	req.ContentLength = size
+	// Left unsigned deliberately: SigV4 covers host and the x-amz-* headers,
+	// and adding this one to signedHeaders would buy nothing. Without it the
+	// store serves published reports as octet-stream and a browser downloads
+	// them instead of rendering them.
+	if ct := mime.TypeByExtension(filepath.Ext(path)); ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
 	c.sign(req, sum)
 
 	resp, err := c.httpClient().Do(req)

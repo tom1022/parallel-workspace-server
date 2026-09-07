@@ -2,66 +2,12 @@ package session
 
 import (
 	"fmt"
-	"net/http"
-	"sync"
 	"time"
 )
 
 // EventAuthProbeFailed tells Hermes Agent this workspace never proved it can
 // reach the model.
 const EventAuthProbeFailed = "AuthProbeFailed"
-
-// Health is the workspace's usability flag. It is separate from the turn state
-// on purpose: a turn can fail and be retried, whereas an unusable workspace
-// must not be handed work at all until an operator looks at it (5.8).
-type Health struct {
-	// ConfigDir is where the quota reading is served from.
-	ConfigDir string
-
-	mu       sync.RWMutex
-	unusable string
-}
-
-// MarkUnusable records that the workspace must not be given work, with the
-// reason. Chat relay is the platform's only push path and it can be down, so
-// this durable, pollable mark — not the notification — is the real signal.
-func (h *Health) MarkUnusable(detail string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.unusable = detail
-}
-
-// Status reports whether the workspace may be handed work, and why not.
-func (h *Health) Status() (bool, string) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.unusable == "", h.unusable
-}
-
-// Handler publishes usability and the quota reading to processes outside the
-// workspace (5.8, 7.10).
-func (h *Health) Handler() http.Handler {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		usable, detail := h.Status()
-		writeJSONResponse(w, http.StatusOK, map[string]any{"usable": usable, "detail": detail})
-	})
-
-	mux.HandleFunc("GET /usage", func(w http.ResponseWriter, r *http.Request) {
-		snapshots, err := Usage(h.ConfigDir)
-		if err != nil {
-			writeJSONResponse(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if snapshots == nil {
-			snapshots = []UsageSnapshot{}
-		}
-		writeJSONResponse(w, http.StatusOK, snapshots)
-	})
-
-	return mux
-}
 
 // ProbeConfig parameterises the one-shot authentication check.
 type ProbeConfig struct {
@@ -86,13 +32,17 @@ type ProbeConfig struct {
 //
 // Failure marks the workspace unusable and notifies Hermes Agent (5.8).
 func AuthProbe(sup *Supervisor, health *Health, cfg ProbeConfig) error {
+	source := &Health{ConfigDir: health.ConfigDir, Source: "auth"}
 	err := runProbe(sup, cfg)
 	if err == nil {
+		// A previous container's failed probe must not outlive a working one.
+		source.ClearUnusable()
 		return nil
 	}
 
 	detail := err.Error()
 	health.MarkUnusable(detail)
+	source.MarkUnusable(detail)
 	// Best-effort: Hermes Agent has no inbound endpoint of its own, so the
 	// durable signal is the mark above.
 	_ = NotifyHermes(cfg.HermesURL, Event{
@@ -104,28 +54,37 @@ func AuthProbe(sup *Supervisor, health *Health, cfg ProbeConfig) error {
 }
 
 func runProbe(sup *Supervisor, cfg ProbeConfig) error {
+	time.Sleep(cfg.Settle)
+	return Request(sup, "auth probe", cfg.Prompt, cfg.Timeout, cfg.Poll)
+}
+
+// Request delivers prompt to the session and returns once the turn it starts
+// has completed. label names the caller in the errors it returns.
+//
+// It is the only way a process that is not attached gets a turn out of the
+// session, so both the authentication probe and the self-healing loop go
+// through here rather than each polling the transcript their own way.
+func Request(sup *Supervisor, label, prompt string, timeout, poll time.Duration) error {
 	// The config area survives on the PVC, so a previous container's finished
-	// turn is already in the record. Without this snapshot the probe would
-	// read that as its own success and never actually test the credential.
+	// turn is already in the record. Without this snapshot the wait would read
+	// that as this request's own completion and return immediately.
 	before, err := sup.TurnState()
 	if err != nil {
-		return fmt.Errorf("supervisor: auth probe could not read the turn state: %w", err)
+		return fmt.Errorf("supervisor: %s could not read the turn state: %w", label, err)
 	}
 
-	time.Sleep(cfg.Settle)
-	if err := sup.SendInput(cfg.Prompt); err != nil {
-		return fmt.Errorf("supervisor: auth probe could not reach the session: %w", err)
+	if err := sup.SendInput(prompt); err != nil {
+		return fmt.Errorf("supervisor: %s could not reach the session: %w", label, err)
 	}
 
-	poll := cfg.Poll
 	if poll <= 0 {
 		poll = time.Second
 	}
-	deadline := time.Now().Add(cfg.Timeout)
+	deadline := time.Now().Add(timeout)
 	for {
 		state, err := sup.TurnState()
 		if err != nil {
-			return fmt.Errorf("supervisor: auth probe could not read the turn state: %w", err)
+			return fmt.Errorf("supervisor: %s could not read the turn state: %w", label, err)
 		}
 
 		switch state.Kind {
@@ -134,10 +93,10 @@ func runProbe(sup *Supervisor, cfg ProbeConfig) error {
 				return nil
 			}
 		case TurnFailed:
-			return fmt.Errorf("supervisor: auth probe failed: %s", state.Detail)
+			return fmt.Errorf("supervisor: %s failed: %s", label, state.Detail)
 		}
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf("supervisor: auth probe did not complete within %s (last state %q)", cfg.Timeout, state.Kind)
+			return fmt.Errorf("supervisor: %s did not complete within %s (last state %q)", label, timeout, state.Kind)
 		}
 		time.Sleep(poll)
 	}
