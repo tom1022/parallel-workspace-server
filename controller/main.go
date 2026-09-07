@@ -4,16 +4,21 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/routing"
 	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/controller"
 )
 
@@ -49,6 +54,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	routingAdapter, routingDomain, routingExposure := buildRoutingAdapter(log, mgr.GetClient(), mgr.GetScheme())
+
 	if err := (&controller.WorkspaceReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -70,6 +77,12 @@ func main() {
 		// and the controller stays the single writer of its status (10.3).
 		ChangedFilesReporter: &controller.SupervisorChangedFilesReporter{Client: mgr.GetClient()},
 		Notify:               controller.HermesNotifier(os.Getenv("HERMES_NOTIFY_URL")),
+		// RoutingAdapter/Domain/RoutingExposure make the preview and report
+		// entry points reachable through whichever implementation this
+		// deployment selected (task 3.1); see buildRoutingAdapter.
+		RoutingAdapter:  routingAdapter,
+		Domain:          routingDomain,
+		RoutingExposure: routingExposure,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create Workspace controller")
 		os.Exit(1)
@@ -103,6 +116,57 @@ func main() {
 		log.Error(err, "manager exited with error")
 		os.Exit(1)
 	}
+}
+
+// buildRoutingAdapter selects and configures the RoutingAdapter this
+// deployment runs (task 3.1, Requirement 3.1/3.2): ROUTING_TYPE picks the
+// implementation, everything else (domain, TLS secret, exposure) is plain
+// configuration rather than a literal in either implementation.
+func buildRoutingAdapter(log logr.Logger, c client.Client, scheme *runtime.Scheme) (routing.RoutingAdapter, string, routing.RoutingExposure) {
+	domain := os.Getenv("ROUTING_DOMAIN")
+	if domain == "" {
+		log.Error(nil, "ROUTING_DOMAIN must be set")
+		os.Exit(1)
+	}
+	tlsSecretName := os.Getenv("ROUTING_TLS_SECRET_NAME")
+	if tlsSecretName == "" {
+		log.Error(nil, "ROUTING_TLS_SECRET_NAME must be set")
+		os.Exit(1)
+	}
+
+	var adapter routing.RoutingAdapter
+	switch routingType := os.Getenv("ROUTING_TYPE"); routingType {
+	case "", "ingress":
+		adapter = &routing.IngressAdapter{
+			Client:        c,
+			Scheme:        scheme,
+			Domain:        domain,
+			TLSSecretName: tlsSecretName,
+			ClassName:     os.Getenv("ROUTING_INGRESS_CLASS_NAME"),
+		}
+	case "traefik":
+		adapter = &routing.TraefikAdapter{
+			Client:        c,
+			Scheme:        scheme,
+			Domain:        domain,
+			TLSSecretName: tlsSecretName,
+		}
+	default:
+		log.Error(nil, "ROUTING_TYPE must be \"ingress\" or \"traefik\"", "value", routingType)
+		os.Exit(1)
+	}
+
+	exposure := routing.RoutingExposure{
+		MiddlewareRefs: splitList(os.Getenv("ROUTING_EXPOSURE_MIDDLEWARE_REFS")),
+	}
+	if raw := os.Getenv("ROUTING_EXPOSURE_ANNOTATIONS"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &exposure.Annotations); err != nil {
+			log.Error(err, "ROUTING_EXPOSURE_ANNOTATIONS must be a JSON object of string keys/values")
+			os.Exit(1)
+		}
+	}
+
+	return adapter, domain, exposure
 }
 
 // splitList reads a comma-separated env var, dropping blanks so an unset or

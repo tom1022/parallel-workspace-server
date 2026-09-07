@@ -84,6 +84,22 @@ gateway:
 # 到達経路 (workspace-networkpolicy.yaml) が参照するルーティング設定。既定値は Traefik が
 # kube-system に常駐する構成 (k3s 既定) を前提にしている。
 routing:
+  # ワークスペースのプレビュー/レポートの入口をどの実装で生成するか (3.1/3.2)。
+  #   ingress: 標準 Kubernetes Ingress のみで配備できる (既定。特定の実装を必須としない)。
+  #   traefik: この chart が前提とする Traefik へ IngressRoute を生成する。
+  # gateway.domain / gateway.tls.secretName をそのまま公開ホスト・証明書として使う
+  # (ワークスペースの到達経路はセッション/プレビュー/レポートで同一ドメイン・同一証明書の
+  # ため、routing 専用の値は持たない)。
+  type: ingress
+  # type: ingress のときだけ意味を持つ。空の間はクラスタの既定 IngressClass に従う。
+  ingressClassName: ""
+  # プレビュー/レポートの入口へ透過的に載せる注釈と中間処理参照 (3.1/3.2 の任意値)。基盤は
+  # 内容を解釈せず素通しするだけで、外部の保護 (forward auth 等) や一時公開の手段 (トンネル
+  # 等) を組むかどうかは利用者に委ねる。middlewareRefs は type: traefik のときだけ意味を
+  # 持つ (完全修飾名、例: "name@kubernetescrd")。
+  exposure:
+    annotations: {}
+    middlewareRefs: []
   # Traefik IngressRoute の中間処理参照 (完全修飾名、例: "name@kubernetescrd")。
   # 空リストの間は付与しない。
   workspaceMiddlewares: []

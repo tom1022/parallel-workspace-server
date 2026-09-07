@@ -42,9 +42,9 @@ func runWithEnvtest(m *testing.M) int {
 	testEnv = &envtest.Environment{
 		CRDInstallOptions: envtest.CRDInstallOptions{
 			Paths: []string{
-				filepath.Join("..", "..", "..", "templates", "crd-workspace.yaml"),
-				filepath.Join("..", "..", "..", "templates", "crd-workspacetemplate.yaml"),
-				filepath.Join("..", "..", "..", "templates", "crd-taskrequest.yaml"),
+				filepath.Join("..", "..", "..", "crds", "workspace.yaml"),
+				filepath.Join("..", "..", "..", "crds", "workspacetemplate.yaml"),
+				filepath.Join("..", "..", "..", "crds", "taskrequest.yaml"),
 				// The CNPG operator itself is not running under envtest (no
 				// controller reconciles Database/DatabaseRole into real Postgres
 				// state), and its own manifest is GitOps-managed outside this

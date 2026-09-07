@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/routing"
 )
 
 func newTestReconciler() *WorkspaceReconciler {
@@ -36,6 +37,18 @@ func newTestReconciler() *WorkspaceReconciler {
 		// Likewise: tests that are not about evacuation must not fail a
 		// suspend or destroy over an unreachable supervisor.
 		EvacuationRequester: &fakeEvacuationRequester{},
+		// Tests unrelated to routing adapter selection don't want to know
+		// about it, so they get a working default (Traefik, matching what
+		// this deployment ran before task 3.1); ingress_reconciler_test.go
+		// overrides RoutingAdapter/Domain where the selection itself is
+		// under test.
+		RoutingAdapter: &routing.TraefikAdapter{
+			Client:        testClient,
+			Scheme:        scheme.Scheme,
+			Domain:        testRoutingDomain,
+			TLSSecretName: testRoutingTLSSecretName,
+		},
+		Domain: testRoutingDomain,
 	}
 }
 

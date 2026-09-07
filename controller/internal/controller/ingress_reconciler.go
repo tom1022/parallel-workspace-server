@@ -1,45 +1,18 @@
-// This file covers task 2.3: Traefik IngressRoute generation/deletion for a
-// workspace's three externally reachable systems (design.md "Ingress
-// Router", Requirement 11.1-11.7). No typed Go API for the Traefik CRD
-// provider is vendored into this module, so these are built as
-// unstructured.Unstructured, following the same approach as
-// database_reconciler.go for CNPG.
+// This file covers task 3.1: making a workspace's preview and report
+// endpoints reachable through a pluggable RoutingAdapter (design.md "Routing
+// Adapter", Requirement 3.1/3.2, internal/adapter/routing) instead of a
+// hardcoded Traefik IngressRoute. The reconcile loop asks the adapter for
+// "a reachable entry point" and never learns which resource kind backs it.
 package controller
 
 import (
 	"context"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/routing"
 )
 
 const (
-	traefikAPIVersion = "traefik.io/v1alpha1"
-	ingressRouteKind  = "IngressRoute"
-
-	// forwardAuthChainMiddleware is apps/common/middlewares.yaml's chain. It
-	// must be referenced by the CRD-provider-qualified name rather than the
-	// middleware ref's own `namespace:` field: this cluster's Traefik does
-	// not resolve that field for a cross-namespace Middleware (confirmed
-	// against real router errors — see that file's own comment; the same
-	// <namespace>-<name>@kubernetescrd form is already used by
-	// apps/garage/values.yaml and apps/home-assistant/values.yaml).
-	forwardAuthChainMiddleware = "argocd-forward-auth-chain@kubernetescrd"
-
-	// wildcardCertSecret is cert-manager's *.fickledev.com certificate
-	// (apps/cluster-issuer/wildcard-certificate.yaml), reflected into the
-	// workspace namespace by that Certificate's secretTemplate annotations.
-	wildcardCertSecret = "tls-fickledev-com"
-
-	ingressEntryPoint = "websecure"
-
-	// fickledevDomain is the zone the wildcard cert and cloudflared tunnel
-	// (my-home-network terraform/cloudflare_dns.tf, cloudflare_zero_trust.tf)
-	// cover.
-	fickledevDomain = "fickledev.com"
-
 	// Backend ports the per-workspace Service is expected to expose once the
 	// Test Runner (task 9) exists to back them; nothing creates that Service
 	// yet. Declaring the contract here lets that task land without
@@ -52,17 +25,18 @@ const (
 )
 
 // workspaceHostnames are the three single-label hostnames a workspace is
-// reachable at. Requirement 11.2: the wildcard cert's SAN (*.fickledev.com)
-// matches exactly one label, so every hostname here must be a bare label
-// with no further dots — a multi-level hostname TLS-terminates silently with
-// Traefik's default self-signed certificate instead of failing loudly. The
-// three systems are told apart by a suffix on that label, not by depth.
-// Session is not routed from here: it is served by the single shared Terminal
-// Gateway, whose wildcard route (apps/devplatform/templates/gateway-ingressroute.yaml)
-// catches the bare label and resolves it back to this Workspace through the
-// Kubernetes API. A per-workspace route for it would outrank that wildcard —
-// Traefik prioritises by rule length — and point the hostname at a backend
-// that does not exist.
+// reachable at. Requirement 11.2: the public certificate's SAN matches
+// exactly one label, so every hostname here must be a bare label with no
+// further dots — a multi-level hostname TLS-terminates silently with the
+// ingress implementation's own default certificate instead of failing
+// loudly. The three systems are told apart by a suffix on that label, not by
+// depth. Session is not routed through RoutingAdapter: it is served by the
+// single shared Terminal Gateway, whose own wildcard route
+// (apps/devplatform/templates/gateway-ingressroute.yaml) catches the bare
+// label and resolves it back to this Workspace through the Kubernetes API. A
+// per-workspace route for it would outrank that wildcard — Traefik
+// prioritises by rule length — and point the hostname at a backend that does
+// not exist.
 type workspaceHostnames struct {
 	Preview string
 	Session string
@@ -92,76 +66,45 @@ func hostLabelWithSuffix(base, suffix string) string {
 	return truncateDNSLabel(base, dnsLabelMaxLength-len(suffix)) + suffix
 }
 
-func ingressRouteRef(namespace, name string) *unstructured.Unstructured {
-	u := &unstructured.Unstructured{}
-	u.SetAPIVersion(traefikAPIVersion)
-	u.SetKind(ingressRouteKind)
-	u.SetName(name)
-	u.SetNamespace(namespace)
-	return u
-}
-
-// buildIngressRoute wires host -> forward-auth-chain -> resourceName's
-// (future) Service:port. entryPoints is restricted to websecure: these
-// hostnames only exist behind the wildcard cert, and cloudflared's tunnel
-// config (my-home-network) forwards its ingress to Traefik over HTTPS.
-func buildIngressRoute(ws *devplatformv1alpha1.Workspace, name, host, resourceName string, port int64) *unstructured.Unstructured {
-	ir := ingressRouteRef(ws.Namespace, name)
-	ir.SetLabels(workspaceLabels(ws))
-	ir.Object["spec"] = map[string]interface{}{
-		"entryPoints": []interface{}{ingressEntryPoint},
-		"routes": []interface{}{
-			map[string]interface{}{
-				"kind":  "Rule",
-				"match": "Host(`" + host + "." + fickledevDomain + "`)",
-				"middlewares": []interface{}{
-					map[string]interface{}{"name": forwardAuthChainMiddleware},
-				},
-				"services": []interface{}{
-					map[string]interface{}{
-						"name": resourceName,
-						"port": port,
-					},
-				},
-			},
+// routingTarget builds the RoutingAdapter request for ws/resourceName.
+// Remove only reads Namespace/ServiceName (see RoutingTarget), so callers
+// that only need to identify already-generated resources for cleanup
+// (failAndRollback) can use this too, not just Ensure.
+func (r *WorkspaceReconciler) routingTarget(ws *devplatformv1alpha1.Workspace, resourceName string) routing.RoutingTarget {
+	hosts := deriveWorkspaceHostnames(resourceName)
+	return routing.RoutingTarget{
+		WorkspaceName: ws.Name,
+		WorkspaceUID:  ws.UID,
+		Namespace:     ws.Namespace,
+		ServiceName:   resourceName,
+		Hostnames: routing.RoutingHostnames{
+			Preview: hosts.Preview,
+			Report:  hosts.Report,
 		},
-		"tls": map[string]interface{}{
-			"secretName": wildcardCertSecret,
+		Ports: routing.RoutingPorts{
+			Preview: previewServicePort,
+			Report:  reportServicePort,
 		},
+		Labels:   workspaceLabels(ws),
+		Exposure: r.RoutingExposure,
 	}
-	return ir
 }
 
-// reconcileIngress creates the IngressRoutes fronting a workspace and returns
-// all three URLs it makes reachable (11.1). Each route carries an
-// OwnerReference to ws, so Kubernetes' garbage collector removes it only
-// when ws itself is deleted (11.7). No cloudflared/DNS change is needed per
-// workspace: every hostname here already falls under the wildcard already
-// tunnelled to Traefik (11.3/11.4).
+// reconcileIngress makes the workspace's preview and report endpoints
+// reachable through whichever RoutingAdapter this deployment selected, and
+// returns all three URLs the workspace is reachable at (11.1). Session needs
+// no per-workspace resource (see workspaceHostnames), so its URL is built
+// directly from r.Domain instead of round-tripping through the adapter.
 func (r *WorkspaceReconciler) reconcileIngress(ctx context.Context, ws *devplatformv1alpha1.Workspace, resourceName string) (devplatformv1alpha1.WorkspaceURLs, error) {
 	hosts := deriveWorkspaceHostnames(resourceName)
 
-	routes := [...]struct {
-		name string
-		host string
-		port int64
-	}{
-		{resourceName + hostSuffixPreview, hosts.Preview, previewServicePort},
-		{resourceName + hostSuffixReport, hosts.Report, reportServicePort},
-	}
-	for _, rt := range routes {
-		ir := buildIngressRoute(ws, rt.name, rt.host, resourceName, rt.port)
-		if err := controllerutil.SetControllerReference(ws, ir, r.Scheme); err != nil {
-			return devplatformv1alpha1.WorkspaceURLs{}, err
-		}
-		if err := r.ensureCreated(ctx, ir); err != nil {
-			return devplatformv1alpha1.WorkspaceURLs{}, err
-		}
+	if err := r.RoutingAdapter.Ensure(ctx, r.routingTarget(ws, resourceName)); err != nil {
+		return devplatformv1alpha1.WorkspaceURLs{}, err
 	}
 
 	return devplatformv1alpha1.WorkspaceURLs{
-		Preview: "https://" + hosts.Preview + "." + fickledevDomain,
-		Session: "https://" + hosts.Session + "." + fickledevDomain,
-		Report:  "https://" + hosts.Report + "." + fickledevDomain,
+		Preview: "https://" + hosts.Preview + "." + r.Domain,
+		Session: "https://" + hosts.Session + "." + r.Domain,
+		Report:  "https://" + hosts.Report + "." + r.Domain,
 	}, nil
 }

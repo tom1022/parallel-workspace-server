@@ -94,6 +94,9 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `gateway.oidc.issuer`/`audience`/`jwksUrl` | 外部 IdP の Bearer JWT 検証パラメータ | なし | **必須** |
 | `gateway.ssh.*` | SSH 認証局の Secret 名・証明書 TTL 等 | チャート既定のリソース名 | 省略可 |
 | `gateway.nodeSelector` | ゲートウェイの配置制約 | `{}` (制約なし) | 省略可 |
+| `routing.type` | ワークスペースのプレビュー/レポートの入口を生成する実装 (`ingress`\|`traefik`) | `ingress` (標準 Ingress のみで配備できる) | 省略可 |
+| `routing.ingressClassName` | `routing.type: ingress` のときの IngressClass | `""` (クラスタの既定に従う) | 省略可 |
+| `routing.exposure.annotations`/`middlewareRefs` | プレビュー/レポートの入口へ透過的に載せる注釈と中間処理参照。基盤は内容を解釈しない | `{}` / `[]` (何も載せない) | 省略可。`middlewareRefs` は `routing.type: traefik` のときだけ意味を持つ |
 | `routing.workspaceMiddlewares`/`apiMiddlewares` | Traefik IngressRoute に付与する中間処理の完全修飾名 | `[]` (付与しない) | 省略可 |
 | `routing.ingressNamespace`/`ingressPodSelector` | ルーティング実装がワークスペースへ到達するための NetworkPolicy 許可元 | `kube-system` / `app.kubernetes.io/name: traefik` (Traefik 同梱の k3s を既定と仮定) | 省略可。空にするとこの経路を許可しない |
 | `workspaceNamespace` | Workspace/WorkspaceTemplate を置くネームスペース | `devplatform-workspaces` | **必須** |

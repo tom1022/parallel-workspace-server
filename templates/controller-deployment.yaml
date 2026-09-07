@@ -46,6 +46,22 @@ spec:
             # モデル別の利用枠に到達したときの切り替え順 (7.7)。
             - name: MODEL_FALLBACKS
               value: {{ join "," .Values.taskQueue.modelFallbacks | quote }}
+            # ワークスペースのプレビュー/レポートの入口をどの実装 (RoutingAdapter) で
+            # 生成するか (3.1/3.2)。公開ホスト・証明書は routing 専用の値を持たず
+            # gateway.domain / gateway.tls.secretName を使う (セッションと同一ドメイン・
+            # 同一証明書のため)。
+            - name: ROUTING_TYPE
+              value: {{ .Values.routing.type | default "ingress" | quote }}
+            - name: ROUTING_DOMAIN
+              value: {{ required "gateway.domain must be set" .Values.gateway.domain | quote }}
+            - name: ROUTING_TLS_SECRET_NAME
+              value: {{ required "gateway.tls.secretName must be set" .Values.gateway.tls.secretName | quote }}
+            - name: ROUTING_INGRESS_CLASS_NAME
+              value: {{ .Values.routing.ingressClassName | default "" | quote }}
+            - name: ROUTING_EXPOSURE_MIDDLEWARE_REFS
+              value: {{ join "," (.Values.routing.exposure.middlewareRefs | default (list)) | quote }}
+            - name: ROUTING_EXPOSURE_ANNOTATIONS
+              value: {{ .Values.routing.exposure.annotations | default dict | toJson | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
