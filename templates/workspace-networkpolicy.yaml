@@ -14,6 +14,11 @@
 # (devplatform) に居るため同一の from で足りる。それ以外の namespace からの到達は拒否する。
 # subnet router は経路を SNAT して転送するため、送信元は Connector が生成する Pod となり
 # namespaceSelector で絞れる。
+# 加えて Traefik からプレビュー (3000/tcp) とレポート (8080/tcp) への到達を許可する。
+# Workspace Controller が払い出す IngressRoute (11.1) の転送先がこの 2 ポートで、
+# k3s 同梱の Traefik は kube-system に常駐するため、この経路がないと生成した
+# ルーティングが機能しない。kube-system には CoreDNS 等の無関係な Pod も居るので
+# podSelector で Traefik に限定する (Pod IP は再作成のたびに変わるため ipBlock では絞れない)。
 #
 # egress: devplatform-db namespace (ブランチ専用 DB、5432/tcp)、
 # garage namespace (退避・レポート保管先のオブジェクトストレージ、3900/tcp)、kube-system
@@ -54,6 +59,18 @@ spec:
       ports:
         - protocol: TCP
           port: 22
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 8080
   egress:
     - to:
         - namespaceSelector:

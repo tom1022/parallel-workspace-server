@@ -29,6 +29,10 @@ import (
 // than a value.
 const isolationIntReleaseNS = "devplatform"
 
+// isolationIntTraefikNS is where k3s' packaged Traefik runs; it is not a chart
+// value because nothing in this chart can move it.
+const isolationIntTraefikNS = "kube-system"
+
 // isolationIntClusterCIDRs are this cluster's Pod and Service ranges. An egress
 // ipBlock that reaches into them reaches other workspaces and other namespaces,
 // which is exactly what 14.7/14.8 forbid.
@@ -197,6 +201,7 @@ func TestIsolationNetworkPolicyLimitsCrossNamespaceReach(t *testing.T) {
 	wantIngress := map[string]map[string]bool{
 		isolationIntReleaseNS:                              {"TCP/8787": true},
 		isolationIntChartValue(t, "subnetRouterNamespace"): {"TCP/22": true},
+		isolationIntTraefikNS:                              isolationIntPreviewReportPorts(),
 	}
 	wantEgress := map[string]map[string]bool{
 		"devplatform-db": {"TCP/5432": true},
@@ -240,6 +245,60 @@ func TestIsolationNetworkPolicyLimitsCrossNamespaceReach(t *testing.T) {
 	}
 	if externalRules != 1 {
 		t.Errorf("external egress rules = %d, want exactly 1", externalRules)
+	}
+}
+
+// isolationIntPreviewReportPorts is derived from ingress_reconciler.go's own
+// constants so the policy cannot drift away from the ports the generated
+// IngressRoutes actually forward to.
+func isolationIntPreviewReportPorts() map[string]bool {
+	return map[string]bool{
+		fmt.Sprintf("TCP/%d", previewServicePort): true,
+		fmt.Sprintf("TCP/%d", reportServicePort):  true,
+	}
+}
+
+// TestIsolationNetworkPolicyAdmitsTraefikToPreviewAndReport covers 11.1/11.5:
+// the per-workspace IngressRoutes are inert unless Traefik itself may reach the
+// preview and report ports, and that exception must not widen to any other
+// source — including another workspace in the same namespace.
+func TestIsolationNetworkPolicyAdmitsTraefikToPreviewAndReport(t *testing.T) {
+	np := isolationIntNetworkPolicy(t)
+	wantPorts := isolationIntPreviewReportPorts()
+
+	matched := 0
+	for i, rule := range np.Spec.Ingress {
+		ports := isolationIntPortSet(rule.Ports)
+		serving := false
+		for port := range wantPorts {
+			if ports[port] {
+				serving = true
+			}
+		}
+		if !serving {
+			continue
+		}
+		matched++
+
+		if fmt.Sprint(ports) != fmt.Sprint(wantPorts) {
+			t.Errorf("ingress rule %d ports = %v, want exactly %v", i, ports, wantPorts)
+		}
+		for _, peer := range rule.From {
+			if isolationIntPeerReachesOwnNamespace(t, peer, np.Namespace) {
+				t.Errorf("ingress rule %d admits peer %+v inside the workspace namespace on the preview/report ports", i, peer)
+				continue
+			}
+			if peer.NamespaceSelector == nil || peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != isolationIntTraefikNS {
+				t.Errorf("ingress rule %d admits peer %+v; only %s may reach the preview/report ports", i, peer, isolationIntTraefikNS)
+				continue
+			}
+			if peer.PodSelector == nil || peer.PodSelector.MatchLabels["app.kubernetes.io/name"] != "traefik" {
+				t.Errorf("ingress rule %d peer %+v is not narrowed to the Traefik Pods", i, peer)
+			}
+		}
+	}
+	if matched != 1 {
+		t.Errorf("ingress rules serving the preview/report ports = %d, want exactly 1", matched)
 	}
 }
 
