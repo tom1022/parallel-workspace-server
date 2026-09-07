@@ -318,3 +318,88 @@ func heldReason(task devplatformv1alpha1.TaskRequest) string {
 	}
 	return ""
 }
+
+// fakeObserver serves a canned reading, so the dispatch decision can be
+// exercised without a workspace Pod.
+type fakeObserver struct {
+	reading UsageReading
+	err     error
+	calls   int
+}
+
+func (f *fakeObserver) ObserveUsage(context.Context, *devplatformv1alpha1.Workspace) (UsageReading, error) {
+	f.calls++
+	return f.reading, f.err
+}
+
+func snapshot(group, model string, remaining float64) UsageSnapshot {
+	return UsageSnapshot{Kind: "window", Group: group, Model: model, RemainingPercent: remaining, Active: true}
+}
+
+// 7.11: a workspace whose account-wide window is spent must not be handed new
+// work, however many slots are free.
+func TestTaskQueue_HoldsWhenTheQuotaIsSpent(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createReadyWorkspace(t, ctx, ns, "ws-a")
+	createTask(t, ctx, ns, "task-0", "ws-a")
+
+	r := &TaskQueueReconciler{
+		Client:        testClient,
+		MaxConcurrent: 5,
+		UsageObserver: &fakeObserver{reading: UsageReading{Snapshots: []UsageSnapshot{snapshot("session", "", 0)}}},
+	}
+	runQueue(t, ctx, r, ns)
+
+	if got := taskPhases(t, ctx, ns)["task-0"]; got != devplatformv1alpha1.TaskPhasePending {
+		t.Errorf("task-0 = %q, want Pending (quota spent)", got)
+	}
+	var held devplatformv1alpha1.TaskRequest
+	if err := testClient.Get(ctx, types.NamespacedName{Name: "task-0", Namespace: ns}, &held); err != nil {
+		t.Fatalf("get task-0: %v", err)
+	}
+	if reason := heldReason(held); reason != "QuotaExhausted" {
+		t.Errorf("hold reason = %q, want QuotaExhausted", reason)
+	}
+	if hits := r.recentQuotaHits; len(hits) != 1 || hits[0].Scope != QuotaScopeSession {
+		t.Errorf("recent quota hits = %v, want one session hit", hits)
+	}
+}
+
+func TestTaskQueue_DispatchesWhileQuotaRemains(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createReadyWorkspace(t, ctx, ns, "ws-a")
+	createTask(t, ctx, ns, "task-0", "ws-a")
+
+	r := &TaskQueueReconciler{
+		Client:        testClient,
+		MaxConcurrent: 5,
+		UsageObserver: &fakeObserver{reading: UsageReading{Snapshots: []UsageSnapshot{snapshot("session", "", 70)}}},
+	}
+	runQueue(t, ctx, r, ns)
+
+	if got := taskPhases(t, ctx, ns)["task-0"]; got != devplatformv1alpha1.TaskPhaseRunning {
+		t.Errorf("task-0 = %q, want Running", got)
+	}
+}
+
+// An unreachable supervisor must not stop the queue: the reading is an input
+// to throttling, not a precondition for working at all.
+func TestTaskQueue_DispatchesWhenTheReadingIsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createReadyWorkspace(t, ctx, ns, "ws-a")
+	createTask(t, ctx, ns, "task-0", "ws-a")
+
+	r := &TaskQueueReconciler{
+		Client:        testClient,
+		MaxConcurrent: 5,
+		UsageObserver: &fakeObserver{err: fmt.Errorf("no running Pod")},
+	}
+	runQueue(t, ctx, r, ns)
+
+	if got := taskPhases(t, ctx, ns)["task-0"]; got != devplatformv1alpha1.TaskPhaseRunning {
+		t.Errorf("task-0 = %q, want Running (an unreadable quota must not stall the queue)", got)
+	}
+}

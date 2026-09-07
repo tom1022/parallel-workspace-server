@@ -140,3 +140,67 @@ func TestTurnStateSkipsMalformedLines(t *testing.T) {
 		t.Errorf("kind = %q, want %q", got.Kind, TurnCompleted)
 	}
 }
+
+// Claude Code records an API failure as its own record type rather than as
+// assistant output, and carries the API's error object inside it. These two
+// lines differ only in that object: the prose is identical, so a reader that
+// went by the message text could not tell them apart.
+const (
+	lineAuthError = `{"type":"user","isApiErrorMessage":true,"timestamp":"2026-09-05T10:00:11.000Z","message":{"role":"user","content":"API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}"}}`
+	lineRateError = `{"type":"user","isApiErrorMessage":true,"timestamp":"2026-09-05T10:00:11.000Z","message":{"role":"user","content":"API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"invalid x-api-key\"}}"}}`
+)
+
+func TestTurnStateFailedCarriesTheApiErrorKind(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+		want string
+	}{
+		{"authentication", lineAuthError, "authentication_error"},
+		{"rate limit", lineRateError, "rate_limit_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := TurnStateFrom(writeTranscript(t, lineUserPrompt, tc.line))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.Kind != TurnFailed {
+				t.Errorf("kind = %q, want %q", got.Kind, TurnFailed)
+			}
+			if got.ErrorKind != tc.want {
+				t.Errorf("ErrorKind = %q, want %q", got.ErrorKind, tc.want)
+			}
+		})
+	}
+}
+
+// A later successful turn must clear the failure: a stale error left on the
+// PVC by an earlier container would otherwise halt dispatch forever.
+func TestTurnStateFailureIsSupersededByALaterTurn(t *testing.T) {
+	got, err := TurnStateFrom(writeTranscript(t, lineUserPrompt, lineAuthError, lineUserPrompt, lineEndTurn))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Kind != TurnCompleted {
+		t.Errorf("kind = %q, want %q", got.Kind, TurnCompleted)
+	}
+	if got.ErrorKind != "" {
+		t.Errorf("ErrorKind = %q, want it cleared", got.ErrorKind)
+	}
+}
+
+// An error record with no decodable API error object still marks the turn
+// failed; only the kind is unknown.
+func TestTurnStateFailedWithoutAnErrorObject(t *testing.T) {
+	line := `{"type":"user","isApiErrorMessage":true,"timestamp":"2026-09-05T10:00:11.000Z","message":{"role":"user","content":"API Error: Connection error."}}`
+	got, err := TurnStateFrom(writeTranscript(t, lineUserPrompt, line))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Kind != TurnFailed {
+		t.Errorf("kind = %q, want %q", got.Kind, TurnFailed)
+	}
+	if got.ErrorKind != "" {
+		t.Errorf("ErrorKind = %q, want empty", got.ErrorKind)
+	}
+}

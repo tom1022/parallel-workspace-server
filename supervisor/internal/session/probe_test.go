@@ -180,3 +180,23 @@ func TestAuthProbeIgnoresATurnFinishedBeforeItStarted(t *testing.T) {
 		t.Error("workspace must be marked unusable (5.8)")
 	}
 }
+
+// An API failure left in the record by an earlier container must not fail the
+// next container's probe: the record lives on the PVC and outlives the process
+// that wrote it.
+func TestRequestIgnoresAFailureItDidNotProvoke(t *testing.T) {
+	sup := newTestSupervisor(t)
+	projects := filepath.Join(sup.ConfigDir, "projects", "-workspace-repo")
+	if err := os.MkdirAll(projects, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := lineUserPrompt + "\n" + lineAuthError + "\n"
+	if err := os.WriteFile(filepath.Join(projects, "sess.jsonl"), []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	completeTurnAfter(t, sup.ConfigDir, 200*time.Millisecond)
+
+	if err := Request(sup, "probe", "reply with ok", 3*time.Second, 50*time.Millisecond); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+}

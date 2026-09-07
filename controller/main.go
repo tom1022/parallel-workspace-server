@@ -79,6 +79,10 @@ func main() {
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		MaxConcurrent: maxConcurrentTasks,
+		// The quota reading comes from the workspace rather than from a
+		// separate call to Anthropic: answering must not itself consume quota
+		// (7.10).
+		UsageObserver: &controller.SupervisorUsageObserver{Client: mgr.GetClient()},
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create TaskQueue controller")
 		os.Exit(1)

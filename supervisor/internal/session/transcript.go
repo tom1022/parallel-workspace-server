@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Turn kinds. The states mirror the SessionControl contract in design.md.
@@ -26,6 +27,11 @@ type TurnState struct {
 	Model     string `json:"model,omitempty"`
 	EndedAt   string `json:"endedAt,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+	// ErrorKind is the Anthropic API's own error type for a failed turn
+	// ("authentication_error", "rate_limit_error", ...). It exists so a caller
+	// can act on the failure without reading Detail, whose wording is the
+	// rendered message and not a contract (7.5).
+	ErrorKind string `json:"errorKind,omitempty"`
 }
 
 // transcriptRecord is the subset of Claude Code's JSONL record shape the turn
@@ -35,12 +41,23 @@ type TurnState struct {
 type transcriptRecord struct {
 	Type    string `json:"type"`
 	IsMeta  bool   `json:"isMeta"`
+	IsError bool   `json:"isApiErrorMessage"`
 	Time    string `json:"timestamp"`
 	Message *struct {
 		Model      string          `json:"model"`
 		StopReason string          `json:"stop_reason"`
 		Content    json.RawMessage `json:"content"`
 	} `json:"message"`
+}
+
+// apiError is the Anthropic API's error envelope as Claude Code embeds it in
+// the record it writes for a failed request.
+type apiError struct {
+	Type  string `json:"type"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 type contentBlock struct {
@@ -97,6 +114,14 @@ func advance(rec transcriptRecord) (TurnState, bool) {
 	if rec.Message == nil || rec.IsMeta {
 		return TurnState{}, false
 	}
+	// Checked before the type switch: Claude Code files the error under the
+	// "user" type, so the flag is the only thing separating a failed request
+	// from the prompt that provoked it.
+	if rec.IsError {
+		kind, detail := apiErrorFrom(rec.Message.Content)
+		return TurnState{Kind: TurnFailed, ErrorKind: kind, Detail: detail, EndedAt: rec.Time}, true
+	}
+
 	switch rec.Type {
 	case "user":
 		// Both a fresh prompt and a returning tool result hand control back to
@@ -111,6 +136,27 @@ func advance(rec transcriptRecord) (TurnState, bool) {
 		}
 	}
 	return TurnState{}, false
+}
+
+// apiErrorFrom pulls the API's error object out of the record's content. The
+// content is the rendered message with the error envelope appended, so the
+// object is located by decoding from the first brace rather than by matching
+// the prose around it: the wording changes between versions, the envelope's
+// shape does not.
+func apiErrorFrom(content json.RawMessage) (kind, detail string) {
+	var text string
+	if err := json.Unmarshal(content, &text); err != nil {
+		return "", ""
+	}
+	i := strings.IndexByte(text, '{')
+	if i < 0 {
+		return "", ""
+	}
+	var e apiError
+	if err := json.NewDecoder(strings.NewReader(text[i:])).Decode(&e); err != nil || e.Error == nil {
+		return "", ""
+	}
+	return e.Error.Type, e.Error.Message
 }
 
 func toolName(content json.RawMessage) string {

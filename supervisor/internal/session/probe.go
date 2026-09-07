@@ -93,7 +93,13 @@ func Request(sup *Supervisor, label, prompt string, timeout, poll time.Duration)
 				return nil
 			}
 		case TurnFailed:
-			return fmt.Errorf("supervisor: %s failed: %s", label, state.Detail)
+			// Same guard as the completed case: the record outlives the
+			// container that wrote it, so an earlier failure is not this
+			// request's. A crashed session reports no EndedAt at all, which
+			// still differs from the snapshot and fails here.
+			if state.EndedAt != before.EndedAt {
+				return fmt.Errorf("supervisor: %s failed: %s", label, state.Detail)
+			}
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("supervisor: %s did not complete within %s (last state %q)", label, timeout, state.Kind)

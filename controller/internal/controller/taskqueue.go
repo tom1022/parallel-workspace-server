@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
@@ -30,6 +31,11 @@ const (
 	maxRecentQuotaHits = 20
 
 	conditionDispatched = "Dispatched"
+
+	// quotaRecheckInterval paces the retry while a quota window is spent. The
+	// reading carries a reset time, but polling on a fixed interval costs one
+	// cheap file read per workspace and needs no clock agreement.
+	quotaRecheckInterval = 5 * time.Minute
 )
 
 // QuotaScope names which of Claude Code's quota windows was exhausted. The
@@ -67,6 +73,15 @@ type TaskQueueReconciler struct {
 	// running Claude Code tasks. Non-positive falls back to
 	// defaultMaxConcurrentTasks.
 	MaxConcurrent int
+
+	// UsageObserver supplies the structured quota reading the dispatch
+	// decision rests on (7.11). Unset disables quota-based throttling.
+	UsageObserver UsageObserver
+
+	// MinRemainingPercent is the balance below which a quota window counts as
+	// spent. Zero throttles only once a window is actually gone; raise it to
+	// leave headroom for work already in flight.
+	MinRemainingPercent float64
 
 	// Now overrides time.Now; tests may fake it.
 	Now func() time.Time
@@ -147,6 +162,17 @@ func (r *TaskQueueReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			continue
 		}
 
+		reading, ok := r.observe(ctx, task)
+		if ok {
+			if scope, spent := exhaustedScope(reading.Snapshots, r.MinRemainingPercent); spent {
+				r.recordQuotaHit(scope, r.now())
+				if err := r.holdAll(ctx, pending[i:], "QuotaExhausted", fmt.Sprintf("the %s quota window is spent", scope)); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{RequeueAfter: quotaRecheckInterval}, nil
+			}
+		}
+
 		if err := r.dispatch(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -154,6 +180,38 @@ func (r *TaskQueueReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// observe reads the quota for the workspace a task would run in. A failed read
+// reports false rather than an error: the reading throttles dispatch, and an
+// unreachable supervisor must not also stop it.
+func (r *TaskQueueReconciler) observe(ctx context.Context, task *devplatformv1alpha1.TaskRequest) (UsageReading, bool) {
+	if r.UsageObserver == nil {
+		return UsageReading{}, false
+	}
+	var ws devplatformv1alpha1.Workspace
+	if err := r.Get(ctx, types.NamespacedName{Name: task.Spec.WorkspaceRef, Namespace: task.Namespace}, &ws); err != nil {
+		return UsageReading{}, false
+	}
+	reading, err := r.UsageObserver.ObserveUsage(ctx, &ws)
+	if err != nil {
+		log.FromContext(ctx).Info("quota reading unavailable, dispatching without it",
+			"workspace", ws.Name, "error", err)
+		return UsageReading{}, false
+	}
+	return reading, true
+}
+
+// holdAll parks the rest of the queue under one reason. The quota windows and
+// the credential are account-wide, so a condition that stops one task stops
+// every task behind it.
+func (r *TaskQueueReconciler) holdAll(ctx context.Context, tasks []devplatformv1alpha1.TaskRequest, reason, message string) error {
+	for i := range tasks {
+		if err := r.hold(ctx, &tasks[i], reason, message); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *TaskQueueReconciler) workspaceReady(ctx context.Context, task *devplatformv1alpha1.TaskRequest) (bool, error) {
