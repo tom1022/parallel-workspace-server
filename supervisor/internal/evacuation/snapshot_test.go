@@ -84,6 +84,9 @@ func write(t *testing.T, dir, name, content string) {
 // commit already shared with that remote.
 func newRepo(t *testing.T) (workingDir, remote string) {
 	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
 	root := t.TempDir()
 	remote = filepath.Join(root, "remote.git")
 	seed := filepath.Join(root, "seed")

@@ -18,8 +18,9 @@ import (
 )
 
 // testEnv boots a real (kubelet-less) kube-apiserver + etcd from the CRD YAML
-// under apps/devplatform/templates/, which stays the single source of truth
-// for the schema (no generated/duplicated CRD copy in this module).
+// under templates/ (this module's own CRDs) plus the vendored fixtures under
+// hack/ (CRDs owned by operators outside this module, trimmed to the fields
+// this controller sets).
 var testEnv *envtest.Environment
 var testClient client.Client
 
@@ -46,10 +47,12 @@ func runWithEnvtest(m *testing.M) int {
 				filepath.Join("..", "..", "..", "templates", "crd-taskrequest.yaml"),
 				// The CNPG operator itself is not running under envtest (no
 				// controller reconciles Database/DatabaseRole into real Postgres
-				// state), but installing its CRDs from the manifest this cluster
-				// actually deploys lets tests create and assert on the generated
-				// spec content with real schema validation.
-				filepath.Join("..", "..", "..", "..", "cnpg-operator", "cnpg-operator.yaml"),
+				// state), and its own manifest is GitOps-managed outside this
+				// module, so its CRDs are trimmed to the fields this controller
+				// sets and vendored as a test fixture (like the Traefik CRD
+				// below), letting tests assert on the generated spec content
+				// with real schema validation.
+				filepath.Join("..", "..", "hack", "cnpg-database-crds.yaml"),
 				// Traefik ships as part of k3s itself (no GitOps-managed manifest
 				// to point at), so its IngressRoute CRD is trimmed to the fields
 				// this controller sets and vendored as a test fixture instead.

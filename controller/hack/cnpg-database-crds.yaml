@@ -1,0 +1,109 @@
+# Test-only fixture. CNPG's own manifest is GitOps-managed outside this
+# repository (apps/cnpg-operator/cnpg-operator.yaml in the source cluster
+# repo), so it is not available to a standalone clone of this module. This
+# trims the Database and DatabaseRole CRDs to the fields database_reconciler.go
+# actually sets (see buildDatabase/buildDatabaseRole), vendored from CNPG's
+# published CRDs, so envtest can validate against real schema instead of
+# skipping validation entirely.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: databases.postgresql.cnpg.io
+spec:
+  group: postgresql.cnpg.io
+  scope: Namespaced
+  names:
+    kind: Database
+    listKind: DatabaseList
+    plural: databases
+    singular: database
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["cluster", "name", "owner"]
+              properties:
+                cluster:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                name:
+                  type: string
+                owner:
+                  type: string
+                ensure:
+                  type: string
+                  enum: ["present", "absent"]
+                databaseReclaimPolicy:
+                  type: string
+                  enum: ["delete", "retain"]
+            status:
+              type: object
+              properties:
+                applied:
+                  type: boolean
+                message:
+                  type: string
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: databaseroles.postgresql.cnpg.io
+spec:
+  group: postgresql.cnpg.io
+  scope: Namespaced
+  names:
+    kind: DatabaseRole
+    listKind: DatabaseRoleList
+    plural: databaseroles
+    singular: databaserole
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["cluster", "name"]
+              properties:
+                cluster:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                name:
+                  type: string
+                login:
+                  type: boolean
+                clientCertificate:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                ensure:
+                  type: string
+                  enum: ["present", "absent"]
+                databaseRoleReclaimPolicy:
+                  type: string
+                  enum: ["delete", "retain"]
+            status:
+              type: object
+              properties:
+                applied:
+                  type: boolean
+                message:
+                  type: string
