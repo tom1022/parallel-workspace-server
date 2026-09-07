@@ -67,6 +67,11 @@ func isolationIntRender(t *testing.T, name string) []byte {
 		"{{ .Release.Namespace }}", isolationIntReleaseNS,
 		"{{ .Values.workspaceNamespace }}", isolationIntChartValue(t, "workspaceNamespace"),
 		"{{ .Values.subnetRouterNamespace }}", isolationIntChartValue(t, "subnetRouterNamespace"),
+		// controller.clusterNodeAccess.enabled defaults to true (values.yaml);
+		// this suite only exercises the shipped default, so the guard is
+		// dropped rather than evaluated.
+		"{{- if .Values.controller.clusterNodeAccess.enabled }}\n", "",
+		"{{- end }}\n", "",
 	).Replace(string(b))
 	if strings.Contains(out, "{{") {
 		t.Fatalf("%s contains a template directive this test cannot render; the substitutions are stale", name)
