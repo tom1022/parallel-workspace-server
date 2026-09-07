@@ -1,6 +1,6 @@
-# Workspace Controller (design.md の 3 調停ループのうち、タスク 2.1 で実装した
-# Workspace 調停ループ本体)。タスクディスパッチ・Blackboard の 2 ループは後続タスクで
-# 同じ Deployment 内の Manager へ追加する。
+# Workspace Controller (design.md の 3 調停ループのうち、Workspace 調停ループと
+# タスクディスパッチループ)。Blackboard ループは後続タスクで同じ Deployment 内の
+# Manager へ追加する。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,6 +39,10 @@ spec:
             # (14.1/14.2), independent of what its RBAC Role additionally allows.
             - name: WORKSPACE_NAMESPACE
               value: {{ .Values.workspaceNamespace | quote }}
+            # 同時に実行中の Claude Code タスク数の上限 (7.1)。超過分は TaskRequest として
+            # キューに残る。
+            - name: MAX_CONCURRENT_TASKS
+              value: {{ required "taskQueue.maxConcurrent must be set" .Values.taskQueue.maxConcurrent | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

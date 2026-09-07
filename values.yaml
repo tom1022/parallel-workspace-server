@@ -130,6 +130,12 @@ workspaceTemplate:
     # 制御プレーンは退避を依頼するだけで自ら S3 を叩かないため、この Secret を参照しない。
     secretRef: devplatform-workspace-evacuation
 
+# Claude Code タスクの流量制御 (7.1/7.2)。同時に実行中のタスク数をこの値以下に保ち、
+# 超過分は TaskRequest としてキューに残す。上限はクラスタの資源ではなく Claude Code の
+# 利用枠を守るための値であり、workspaceQuota.maxPods とは独立に運用者が決める。
+taskQueue:
+  maxConcurrent: 2
+
 # ワークスペース専用ネームスペースへの ResourceQuota (15.5)。既定値は保守的な小さめの値
 # (ワークスペース数個 + テスト実行分を想定) であり、クラスタの実容量見積もり (本 spec の
 # 範囲外) を踏まえて運用者が配備時に上書きする前提。workspace-quota.yaml が参照する。

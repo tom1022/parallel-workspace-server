@@ -1,0 +1,254 @@
+package controller
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+)
+
+const (
+	// defaultMaxConcurrentTasks is a conservative stand-in for the operator's
+	// setting; the real value comes from values.yaml via MAX_CONCURRENT_TASKS.
+	defaultMaxConcurrentTasks = 2
+
+	// maxRecentQuotaHits bounds the history Stats reports (7.12).
+	maxRecentQuotaHits = 20
+
+	conditionDispatched = "Dispatched"
+)
+
+// QuotaScope names which of Claude Code's quota windows was exhausted. The
+// distinction decides whether the governor switches model or stops dispatching
+// altogether (7.6/7.7/7.8).
+type QuotaScope string
+
+const (
+	QuotaScopeModel   QuotaScope = "model"
+	QuotaScopeSession QuotaScope = "session"
+	QuotaScopeWeekly  QuotaScope = "weekly"
+)
+
+// QuotaHit is one observed quota exhaustion.
+type QuotaHit struct {
+	Scope QuotaScope
+	At    time.Time
+}
+
+// QueueStats answers 7.12.
+type QueueStats struct {
+	Queued          int
+	Running         int
+	RecentQuotaHits []QuotaHit
+}
+
+// TaskQueueReconciler is the Task Queue and Quota Governor's dispatch loop. It
+// keeps the number of tasks occupying a workspace session at or below the
+// operator's limit and releases queued tasks as slots free up (7.1/7.2).
+type TaskQueueReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+
+	// MaxConcurrent is the operator-configured ceiling on simultaneously
+	// running Claude Code tasks. Non-positive falls back to
+	// defaultMaxConcurrentTasks.
+	MaxConcurrent int
+
+	// Now overrides time.Now; tests may fake it.
+	Now func() time.Time
+
+	// recentQuotaHits is deliberately in-process: only the queue itself has to
+	// survive a restart (7.2), and rebuilding this history costs one quota
+	// observation rather than a persisted resource.
+	mu              sync.Mutex
+	recentQuotaHits []QuotaHit
+}
+
+func (r *TaskQueueReconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+func (r *TaskQueueReconciler) maxConcurrent() int {
+	if r.MaxConcurrent > 0 {
+		return r.MaxConcurrent
+	}
+	return defaultMaxConcurrentTasks
+}
+
+// Reconcile runs one pass over the whole queue rather than over the triggering
+// object alone: a slot frees when some *other* TaskRequest leaves a running
+// phase, and that event carries no reference to the tasks it unblocks.
+// SetupWithManager pins this to a single worker, which is what keeps the
+// concurrency count free of races (design.md: "ディスパッチ判断は単一ループで行い").
+func (r *TaskQueueReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var list devplatformv1alpha1.TaskRequestList
+	if err := r.List(ctx, &list, client.InNamespace(req.Namespace)); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	running := 0
+	var pending []devplatformv1alpha1.TaskRequest
+	for _, task := range list.Items {
+		if !task.DeletionTimestamp.IsZero() {
+			continue
+		}
+		switch task.Status.Phase {
+		case devplatformv1alpha1.TaskPhaseRunning,
+			devplatformv1alpha1.TaskPhaseVerifying,
+			devplatformv1alpha1.TaskPhaseHumanIntervention:
+			running++
+		case "", devplatformv1alpha1.TaskPhasePending:
+			pending = append(pending, task)
+		}
+	}
+
+	sort.Slice(pending, func(i, j int) bool {
+		return isOlder(pending[i].CreationTimestamp, pending[i].Name, pending[j].CreationTimestamp, pending[j].Name)
+	})
+
+	limit := r.maxConcurrent()
+	for i := range pending {
+		task := &pending[i]
+
+		if running >= limit {
+			if err := r.hold(ctx, task, "ConcurrencyLimit", fmt.Sprintf("%d of %d task slots in use", running, limit)); err != nil {
+				return ctrl.Result{}, err
+			}
+			continue
+		}
+
+		// A task blocked on its own workspace must not stall the queue behind
+		// it: the slot it would have taken stays available to the next task.
+		ready, err := r.workspaceReady(ctx, task)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !ready {
+			if err := r.hold(ctx, task, "WorkspaceNotReady", fmt.Sprintf("workspace %q is not Ready", task.Spec.WorkspaceRef)); err != nil {
+				return ctrl.Result{}, err
+			}
+			continue
+		}
+
+		if err := r.dispatch(ctx, task); err != nil {
+			return ctrl.Result{}, err
+		}
+		running++
+	}
+
+	return ctrl.Result{}, nil
+}
+
+func (r *TaskQueueReconciler) workspaceReady(ctx context.Context, task *devplatformv1alpha1.TaskRequest) (bool, error) {
+	var ws devplatformv1alpha1.Workspace
+	err := r.Get(ctx, types.NamespacedName{Name: task.Spec.WorkspaceRef, Namespace: task.Namespace}, &ws)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return ws.Status.Phase == devplatformv1alpha1.WorkspacePhaseReady, nil
+}
+
+func (r *TaskQueueReconciler) dispatch(ctx context.Context, task *devplatformv1alpha1.TaskRequest) error {
+	task.Status.Phase = devplatformv1alpha1.TaskPhaseRunning
+	meta.SetStatusCondition(&task.Status.Conditions, metav1.Condition{
+		Type:    conditionDispatched,
+		Status:  metav1.ConditionTrue,
+		Reason:  "SlotAvailable",
+		Message: "dispatched to its workspace session",
+	})
+	return r.Status().Update(ctx, task)
+}
+
+// hold records why a task is still queued, writing only when the reason
+// actually changed so a full queue does not generate a status update per task
+// per pass.
+func (r *TaskQueueReconciler) hold(ctx context.Context, task *devplatformv1alpha1.TaskRequest, reason, message string) error {
+	task.Status.Phase = devplatformv1alpha1.TaskPhasePending
+	changed := meta.SetStatusCondition(&task.Status.Conditions, metav1.Condition{
+		Type:    conditionDispatched,
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+	if !changed {
+		return nil
+	}
+	return r.Status().Update(ctx, task)
+}
+
+// recordQuotaHit appends an observed quota exhaustion to the bounded history
+// Stats reports.
+func (r *TaskQueueReconciler) recordQuotaHit(scope QuotaScope, at time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recentQuotaHits = append(r.recentQuotaHits, QuotaHit{Scope: scope, At: at})
+	if len(r.recentQuotaHits) > maxRecentQuotaHits {
+		r.recentQuotaHits = r.recentQuotaHits[len(r.recentQuotaHits)-maxRecentQuotaHits:]
+	}
+}
+
+// Stats reports queue depth, running count and recent quota hits (7.12). The
+// counts are read from the API server, so they describe the queue as it
+// actually is rather than what this process happens to remember.
+func (r *TaskQueueReconciler) Stats(ctx context.Context, namespace string) (QueueStats, error) {
+	var list devplatformv1alpha1.TaskRequestList
+	if err := r.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		return QueueStats{}, err
+	}
+
+	var stats QueueStats
+	for _, task := range list.Items {
+		if !task.DeletionTimestamp.IsZero() {
+			continue
+		}
+		switch task.Status.Phase {
+		case devplatformv1alpha1.TaskPhaseRunning,
+			devplatformv1alpha1.TaskPhaseVerifying,
+			devplatformv1alpha1.TaskPhaseHumanIntervention:
+			stats.Running++
+		case "", devplatformv1alpha1.TaskPhasePending:
+			stats.Queued++
+		}
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stats.RecentQuotaHits = append([]QuotaHit(nil), r.recentQuotaHits...)
+	return stats, nil
+}
+
+// SetupWithManager wires the dispatch loop into a controller-runtime Manager.
+// Workspace is watched too: a workspace reaching Ready is what unblocks the
+// tasks held on it, and that event never touches a TaskRequest.
+func (r *TaskQueueReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&devplatformv1alpha1.TaskRequest{}).
+		Watches(&devplatformv1alpha1.Workspace{}, handler.EnqueueRequestsFromMapFunc(
+			func(_ context.Context, obj client.Object) []reconcile.Request {
+				// Reconcile ignores the object name, so every workspace event
+				// collapses into one queue pass for that namespace.
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: "queue"}}}
+			})).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
+		Complete(r)
+}

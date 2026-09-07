@@ -5,6 +5,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -66,6 +67,20 @@ func main() {
 		Notify:            controller.HermesNotifier(os.Getenv("HERMES_NOTIFY_URL")),
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create Workspace controller")
+		os.Exit(1)
+	}
+
+	maxConcurrentTasks, err := strconv.Atoi(os.Getenv("MAX_CONCURRENT_TASKS"))
+	if err != nil || maxConcurrentTasks < 1 {
+		log.Error(nil, "MAX_CONCURRENT_TASKS must be a positive integer", "value", os.Getenv("MAX_CONCURRENT_TASKS"))
+		os.Exit(1)
+	}
+	if err := (&controller.TaskQueueReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		MaxConcurrent: maxConcurrentTasks,
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to create TaskQueue controller")
 		os.Exit(1)
 	}
 

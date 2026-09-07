@@ -1,0 +1,94 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: taskrequests.devplatform.fickledev.com
+  annotations:
+    # crd-workspace.yaml と同じ理由 (要件 17.5)。この CRD が消えるとキューの実体が
+    # 読めなくなり、制御プレーンを再起動しても投入済みタスクを復元できない (7.12)。
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  group: devplatform.fickledev.com
+  scope: Namespaced
+  names:
+    kind: TaskRequest
+    listKind: TaskRequestList
+    plural: taskrequests
+    singular: taskrequest
+    shortNames:
+      - tr
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Workspace
+          type: string
+          jsonPath: .spec.workspaceRef
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: |
+            Claude Code タスクキューの 1 エントリ。キューの実体をこの CRD の集合として
+            持つことで、制御プレーンの再起動をまたいで滞留タスクが失われない (7.2)。
+            実行時に生成する運用物であり、リポジトリにはこの CRD 定義のみを置く。
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - workspaceRef
+              properties:
+                workspaceRef:
+                  type: string
+                  description: タスクを実行するワークスペース。Ready になるまでディスパッチしない。
+                  minLength: 1
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: |
+                    タスクの状態 (6.10)。Pending -> Running のみ Task Queue が書き、
+                    以降の遷移はタスクを実行・検証する側が書く。
+                  enum:
+                    - Pending
+                    - Running
+                    - Verifying
+                    - HumanIntervention
+                    - Completed
+                    - Failed
+                  default: Pending
+                conditions:
+                  type: array
+                  description: Dispatched 条件。False の reason が滞留理由を示す (7.12)。
+                  default: []
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

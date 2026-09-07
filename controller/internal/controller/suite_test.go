@@ -38,6 +38,7 @@ func runWithEnvtest(m *testing.M) int {
 			Paths: []string{
 				filepath.Join("..", "..", "..", "templates", "crd-workspace.yaml"),
 				filepath.Join("..", "..", "..", "templates", "crd-workspacetemplate.yaml"),
+				filepath.Join("..", "..", "..", "templates", "crd-taskrequest.yaml"),
 				// The CNPG operator itself is not running under envtest (no
 				// controller reconciles Database/DatabaseRole into real Postgres
 				// state), but installing its CRDs from the manifest this cluster
