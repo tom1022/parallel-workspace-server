@@ -22,20 +22,20 @@ import (
 type schemaGVR = schema.GroupVersionResource
 
 var (
-	workspaceGVR = schema.GroupVersionResource{Group: "devplatform.fickledev.com", Version: "v1alpha1", Resource: "workspaces"}
+	workspaceGVR = schema.GroupVersionResource{Group: "workspace.tom1022.github.io", Version: "v1alpha1", Resource: "workspaces"}
 	podGVR       = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 )
 
 // labelWorkspaceName is the label the Workspace Controller puts on everything it
 // owns (controller/internal/controller/resources.go), and is how the gateway
 // finds a workspace's Pod without going through the control plane (4.9).
-const labelWorkspaceName = "devplatform.fickledev.com/workspace"
+const labelWorkspaceName = "workspace.tom1022.github.io/workspace"
 
 // annotationBrowserConnections carries the number of browser connections this
 // gateway holds against a workspace. The Workspace Controller reads it as an
 // idle-detection input (4.8). It is an annotation rather than a status write
 // because the controller is the only writer of Workspace status.
-const annotationBrowserConnections = "devplatform.fickledev.com/browser-connections"
+const annotationBrowserConnections = "workspace.tom1022.github.io/browser-connections"
 
 // defaultSupervisorPort is the Session Supervisor's listen port inside the
 // workspace Pod. It must match the workspace base image and the controller's

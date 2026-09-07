@@ -45,7 +45,7 @@ const (
 	blackboardVolumeName = "blackboard"
 	blackboardMountPath  = "/run/devplatform/blackboard"
 
-	labelWorkspaceName = "devplatform.fickledev.com/workspace"
+	labelWorkspaceName = "workspace.tom1022.github.io/workspace"
 
 	// supervisorBinaryPath and supervisorPort must match the workspace base
 	// image (apps/devplatform/image/workspace/Dockerfile) and the Session

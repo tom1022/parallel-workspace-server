@@ -1,6 +1,6 @@
 # 既定の WorkspaceTemplate 実体。GitOps 管理下に置き (17.4)、実行時に払い出される
 # Workspace 自体はここに含めない (design.md 231行、17.4)。
-apiVersion: devplatform.fickledev.com/v1alpha1
+apiVersion: workspace.tom1022.github.io/v1alpha1
 kind: WorkspaceTemplate
 metadata:
   name: {{ .Values.workspaceTemplate.name }}

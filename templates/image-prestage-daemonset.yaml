@@ -35,7 +35,7 @@ spec:
         app: devplatform-image-prestage
         # ノードの pull 済みイメージバージョンを Pod ラベルからも人手で確認できるようにする
         # 補助情報。判定ロジック (2.5) はこのラベルではなく Node.status.images を参照する。
-        devplatform.fickledev.com/workspace-image-version: {{ .Values.workspaceImage.tag | quote }}
+        workspace.tom1022.github.io/workspace-image-version: {{ .Values.workspaceImage.tag | quote }}
     spec:
       # 全ノードへ配置するため、control-plane を含むあらゆる taint を許容する。
       tolerations:

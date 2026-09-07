@@ -30,10 +30,10 @@ import (
 const (
 	// AnnotationBlackboardSummary carries the branch's work summary, stated by
 	// whoever requested the workspace (10.2).
-	AnnotationBlackboardSummary = "devplatform.fickledev.com/summary"
+	AnnotationBlackboardSummary = "workspace.tom1022.github.io/summary"
 	// AnnotationBlackboardPublicInterfaces carries the comma-separated names
 	// this branch exposes to the others (10.1).
-	AnnotationBlackboardPublicInterfaces = "devplatform.fickledev.com/public-interfaces"
+	AnnotationBlackboardPublicInterfaces = "workspace.tom1022.github.io/public-interfaces"
 )
 
 // changedFilesTimeout bounds one reconcile's read, for the same reason

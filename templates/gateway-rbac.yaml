@@ -20,7 +20,7 @@ metadata:
 rules:
   # patch は接続・切断の通知に使う。書き込む先は annotation のみで、status は
   # Workspace Controller が唯一の書き手であるため触らない (4.8)。
-  - apiGroups: ["devplatform.fickledev.com"]
+  - apiGroups: ["workspace.tom1022.github.io"]
     resources: ["workspaces"]
     verbs: ["get", "list", "create", "delete", "patch"]
   # セッションの到達先は Pod の podIP。ワークスペースには Service が存在しないため

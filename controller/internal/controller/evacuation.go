@@ -25,7 +25,7 @@ const (
 	// evacuationFinalizer holds a Workspace object around after Delete until
 	// evacuation is confirmed, so reconcileTerminating gets a chance to gate
 	// the PVC-delete step on it instead of the object simply vanishing.
-	evacuationFinalizer = "devplatform.fickledev.com/evacuation"
+	evacuationFinalizer = "workspace.tom1022.github.io/evacuation"
 
 	// evacuationPollInterval paces the Terminating requeue loop while
 	// evacuation is still in flight.

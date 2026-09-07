@@ -29,7 +29,7 @@ import (
 // Terminal Gateway currently holds open against a workspace. It is an
 // annotation, not a status field, because the gateway is outside the control
 // plane and must not write status.
-const AnnotationBrowserConnections = "devplatform.fickledev.com/browser-connections"
+const AnnotationBrowserConnections = "workspace.tom1022.github.io/browser-connections"
 
 // supervisorSSHCountTimeout bounds one reconcile's read. It is short: the
 // answer is only worth having while the reconcile that asked for it is still

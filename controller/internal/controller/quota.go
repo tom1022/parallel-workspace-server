@@ -30,7 +30,7 @@ const (
 // its model-scoped window ran out (7.7). It overrides the template's model.
 // An annotation, not a status field, so the governor can record it without
 // contending with the Workspace reconciler over status ownership.
-const AnnotationActiveModel = "devplatform.fickledev.com/active-model"
+const AnnotationActiveModel = "workspace.tom1022.github.io/active-model"
 
 // usageReadTimeout bounds one reconcile's read, matching the other synchronous
 // calls the control plane makes into a workspace.

@@ -46,7 +46,7 @@ var defaultBranchNames = map[string]bool{"main": true, "master": true}
 // (e.g. a deploy key ID) on the Secret it backs, so a future revoke path
 // (workspace destroy, out of this task's scope) has what it needs without
 // re-deriving it.
-const gitCredentialHandleAnnotation = "devplatform.fickledev.com/git-credential-handle"
+const gitCredentialHandleAnnotation = "workspace.tom1022.github.io/git-credential-handle"
 
 // GitCredentialRequest is the scope a workspace's Git credential must be
 // limited to. GitCredentialIssuer implementations are trusted to enforce

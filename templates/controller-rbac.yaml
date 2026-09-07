@@ -23,13 +23,13 @@ metadata:
   name: devplatform-workspace-operator
   namespace: {{ .Values.workspaceNamespace }}
 rules:
-  - apiGroups: ["devplatform.fickledev.com"]
+  - apiGroups: ["workspace.tom1022.github.io"]
     resources: ["workspaces", "workspaces/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["devplatform.fickledev.com"]
+  - apiGroups: ["workspace.tom1022.github.io"]
     resources: ["workspacetemplates"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["devplatform.fickledev.com"]
+  - apiGroups: ["workspace.tom1022.github.io"]
     resources: ["taskrequests", "taskrequests/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
