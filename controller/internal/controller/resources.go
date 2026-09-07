@@ -38,6 +38,13 @@ const (
 	authSecretVolumeName = "claude-auth"
 	workspaceVolumeName  = "workspace"
 
+	// The Blackboard's CLAUDE.md, delivered as a mount so the supervisor
+	// decides when it reaches the session rather than kubelet doing (10.6).
+	// The path is a constant for the same reason workspaceMountPath is: it
+	// must not vary between workspaces.
+	blackboardVolumeName = "blackboard"
+	blackboardMountPath  = "/run/devplatform/blackboard"
+
 	labelWorkspaceName = "devplatform.fickledev.com/workspace"
 
 	// supervisorBinaryPath and supervisorPort must match the workspace base
@@ -222,6 +229,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		{Name: "WORKSPACE_NAME", Value: ws.Name},
 		{Name: "CLAUDE_AUTH_FILE", Value: authMountPath + "/credentials.json"},
 		{Name: "SSH_CA_PUBLIC_KEY", Value: sshCAMountPath + "/" + sshCAPublicKeyKey},
+		{Name: "BLACKBOARD_CLAUDE_MD", Value: blackboardMountPath + "/" + ClaudeMDKey},
 	}, evacuationEnv...)
 	// 8.8: every process started under the working directory inherits the
 	// branch's own connection, so nothing in the repository has to be
@@ -273,12 +281,27 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 				},
 			},
 		},
+		{
+			Name: blackboardVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: ClaudeMDConfigMapName(resourceName),
+					},
+					// Shared context is not a precondition for running the
+					// branch: a document that has not been generated yet must
+					// not hold the Pod at ContainerCreating.
+					Optional: ptr(true),
+				},
+			},
+		},
 	}
 	volumeMounts := []corev1.VolumeMount{
 		{Name: workspaceVolumeName, MountPath: workspaceMountPath},
 		{Name: authSecretVolumeName, MountPath: authMountPath, ReadOnly: true},
 		{Name: databaseCertVolumeName, MountPath: databaseCertMountPath, ReadOnly: true},
 		{Name: sshCAVolumeName, MountPath: sshCAMountPath, ReadOnly: true},
+		{Name: blackboardVolumeName, MountPath: blackboardMountPath, ReadOnly: true},
 	}
 
 	replicas := int32(1)

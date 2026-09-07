@@ -96,6 +96,14 @@ func (r *WorkspaceReconciler) reconcileReady(ctx context.Context, ws *devplatfor
 		}
 	}
 
+	// 10.4: rendered every Ready pass rather than only when this branch's own
+	// entry moved, since the document also carries the other branches'.
+	if ws.Status.WorkspaceId != "" {
+		if err := r.reconcileClaudeMD(ctx, ws, ws.Status.WorkspaceId); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	idle := ws.Status.LastActivityAt != nil && r.now().Sub(ws.Status.LastActivityAt.Time) >= defaultIdleSuspendTimeout
 	requested := ws.Spec.DesiredPhase == devplatformv1alpha1.DesiredPhaseSuspended
 	// A developer holding the workspace — browser or SSH — keeps the clock at

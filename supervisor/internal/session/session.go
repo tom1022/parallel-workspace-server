@@ -54,6 +54,10 @@ type Supervisor struct {
 	OutputLog string
 	// WorkingDir is the branch's checkout, which /changed-files reports on.
 	WorkingDir string
+	// ClaudeMDSource is the mounted Blackboard document, copied into the
+	// checkout at the start of each turn (10.6). Empty leaves the checkout's
+	// CLAUDE.md alone.
+	ClaudeMDSource string
 	// SSHPort is the port SSHEndpoint listens on; zero means DefaultSSHPort.
 	SSHPort int
 
@@ -93,6 +97,18 @@ func (s *Supervisor) SendInput(text string) error {
 	}
 	if c := firstWritable(clients); c != nil {
 		return &SendError{Kind: SendWritableClientPresent, ClientID: c.ID}
+	}
+	// The turn starts with the text below, so this is the point that fixes
+	// which revision of the Blackboard document the turn runs against (10.6).
+	// A source that has not landed yet is not an error (claudemd.go); what
+	// reaches here is an unwritable checkout, which the turn would fail on
+	// anyway.
+	//
+	// ponytail: only turns this process starts are covered — a developer
+	// holding the session writable types straight into tmux, out of reach.
+	// Wire it into the attach path if that case starts to matter.
+	if err := SyncClaudeMD(s.ClaudeMDSource, s.WorkingDir); err != nil {
+		return &SendError{Kind: SendInputRejected, Detail: err.Error()}
 	}
 	if err := s.Tmux.SendText(text); err != nil {
 		return &SendError{Kind: SendInputRejected, Detail: err.Error()}

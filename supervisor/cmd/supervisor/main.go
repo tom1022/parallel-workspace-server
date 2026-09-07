@@ -255,10 +255,11 @@ func serve() error {
 	}
 
 	sup := &session.Supervisor{
-		Tmux:       tm,
-		ConfigDir:  configDir,
-		OutputLog:  filepath.Join(configDir, "session-output.log"),
-		WorkingDir: workingDir,
+		Tmux:           tm,
+		ConfigDir:      configDir,
+		OutputLog:      filepath.Join(configDir, "session-output.log"),
+		WorkingDir:     workingDir,
+		ClaudeMDSource: os.Getenv("BLACKBOARD_CLAUDE_MD"),
 	}
 
 	health := &session.Health{ConfigDir: configDir}

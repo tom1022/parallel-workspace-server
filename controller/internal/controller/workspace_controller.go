@@ -230,6 +230,12 @@ func (r *WorkspaceReconciler) reconcileProvisioning(ctx context.Context, ws *dev
 		return r.requeueOrFail(ctx, ws, resourceName, "PVCCreateFailed", err.Error())
 	}
 
+	// Before the StatefulSet, because the Pod mounts it. It is regenerated
+	// again once the branch's own entry exists (markReady).
+	if err := r.reconcileClaudeMD(ctx, ws, resourceName); err != nil {
+		return r.requeueOrFail(ctx, ws, resourceName, "ClaudeMDUnavailable", err.Error())
+	}
+
 	sts, err := buildStatefulSet(ws, tmpl, resourceName)
 	if err != nil {
 		return r.failAndRollback(ctx, ws, resourceName, "InvalidTemplate", err.Error())
@@ -437,7 +443,12 @@ func (r *WorkspaceReconciler) markReady(ctx context.Context, ws *devplatformv1al
 		Reason:  "SubstrateReady",
 		Message: "workspace PVC and StatefulSet are ready",
 	})
-	return r.Status().Update(ctx, ws)
+	if err := r.Status().Update(ctx, ws); err != nil {
+		return err
+	}
+	// 10.4 regenerates on provisioning too, and only now does this branch's
+	// own entry exist to render.
+	return r.reconcileClaudeMD(ctx, ws, resourceName)
 }
 
 // SetupWithManager wires the reconciler into a controller-runtime Manager.
