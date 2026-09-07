@@ -2,16 +2,20 @@
 # ワークスペース隔離の NetworkPolicy。podSelector: {} でネームスペース内の全 Pod に適用し、
 # policyTypes に Ingress/Egress 両方を指定することで既定 deny へ切り替える (14.7/14.8)。
 #
-# ingress: 同一 namespace 内の Pod 間に加えて、制御プレーン namespace から Session Supervisor
-# のポートへの到達と、subnet router namespace からワークスペース sshd への到達のみを許可する。
-# ワークスペース外から入る経路はこの 3 つだけで、Workspace Controller の POST /evacuate
+# 全ワークスペースが単一の workspaceNamespace を共有し、ワークスペース 1 つは Pod 1 つで
+# 構成されるため、同一 namespace 内の Pod を指す peer は「他のワークスペース」以外を意味
+# しない。したがって ingress/egress のいずれにも同一 namespace の peer を置かない (14.7)。
+#
+# ingress: 制御プレーン namespace から Session Supervisor のポートへの到達と、subnet router
+# namespace からワークスペース sshd への到達のみを許可する。ワークスペース外から入る経路は
+# この 2 つだけで、Workspace Controller の POST /evacuate
 # (16.8) と、共有端末ゲートウェイが開発者のブラウザ接続を中継するための出力取得・入力送出、
 # そして統合開発環境からの任意経路 (4.7) が該当する。前 2 つはいずれも Release.Namespace
 # (devplatform) に居るため同一の from で足りる。それ以外の namespace からの到達は拒否する。
 # subnet router は経路を SNAT して転送するため、送信元は Connector が生成する Pod となり
 # namespaceSelector で絞れる。
 #
-# egress: 同一 namespace 内 Pod、devplatform-db namespace (ブランチ専用 DB、5432/tcp)、
+# egress: devplatform-db namespace (ブランチ専用 DB、5432/tcp)、
 # garage namespace (退避・レポート保管先のオブジェクトストレージ、3900/tcp)、kube-system
 # namespace (CoreDNS と Traefik forward auth 解決) への到達を許可する。加えて外部
 # (クラスタ内 Pod/Service CIDR を除いた 0.0.0.0/0) への 443/53 番ポートのみを許可し、
@@ -37,8 +41,6 @@ spec:
     - Egress
   ingress:
     - from:
-        - podSelector: {}
-    - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Release.Namespace }}
@@ -53,8 +55,6 @@ spec:
         - protocol: TCP
           port: 22
   egress:
-    - to:
-        - podSelector: {}
     - to:
         - namespaceSelector:
             matchLabels:

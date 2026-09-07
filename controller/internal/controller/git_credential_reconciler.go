@@ -30,6 +30,18 @@ import (
 // GitOps-managed, not something an autonomous workspace edits (14.14).
 const platformRepository = "giteaadmin/gitops-apps"
 
+// defaultBranchNames are branch names a workspace credential may never be
+// scoped to. The repository's real default branch is known only to the Git
+// host, so this is the controller's own half of 14.13: without it the
+// reconciler would emit the self-contradictory request "allow pushes to main,
+// but deny pushes to the default branch" and leave the whole guarantee to a
+// hosting side that has not been decided yet.
+//
+// ponytail: a repository whose default branch is named something else slips
+// past this list. Ask the host for the branch once GitCredentialIssuer has a
+// concrete implementation.
+var defaultBranchNames = map[string]bool{"main": true, "master": true}
+
 // gitCredentialHandleAnnotation preserves the issuer's hosting-side handle
 // (e.g. a deploy key ID) on the Secret it backs, so a future revoke path
 // (workspace destroy, out of this task's scope) has what it needs without
@@ -95,6 +107,14 @@ func normalizeRepositoryIdentity(repo string) string {
 func (r *WorkspaceReconciler) reconcileGitCredential(ctx context.Context, ws *devplatformv1alpha1.Workspace, resourceName string) error {
 	if normalizeRepositoryIdentity(ws.Spec.Repository) == platformRepository {
 		return fmt.Errorf("devplatform: refusing to issue a git credential for the platform's own repository %q", ws.Spec.Repository)
+	}
+	branch := strings.TrimSpace(ws.Spec.Branch)
+	baseBranch := ""
+	if ws.Spec.BaseBranch != nil {
+		baseBranch = strings.TrimSpace(*ws.Spec.BaseBranch)
+	}
+	if defaultBranchNames[strings.ToLower(branch)] || (baseBranch != "" && branch == baseBranch) {
+		return fmt.Errorf("devplatform: refusing to issue a git credential that could push to the default branch %q", branch)
 	}
 	if r.GitCredentialIssuer == nil {
 		return fmt.Errorf("devplatform: no GitCredentialIssuer configured")

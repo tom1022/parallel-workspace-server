@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
@@ -21,6 +22,10 @@ import (
 // for the schema (no generated/duplicated CRD copy in this module).
 var testEnv *envtest.Environment
 var testClient client.Client
+
+// testCfg is the admin connection to the envtest control plane, kept so tests
+// can derive clients that act as a different subject.
+var testCfg *rest.Config
 
 func TestMain(m *testing.M) {
 	os.Exit(runWithEnvtest(m))
@@ -65,6 +70,7 @@ func runWithEnvtest(m *testing.M) int {
 		panic(err)
 	}
 	testClient = c
+	testCfg = cfg
 
 	return m.Run()
 }
