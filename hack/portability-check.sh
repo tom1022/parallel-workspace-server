@@ -64,17 +64,33 @@ optional_deps_disabled() {
 }
 check "render succeeds with all optional dependencies disabled" optional_deps_disabled
 
-# 3. 必須値 (現状 taskQueue.maxConcurrent, gateway.tls.secretName) を欠くと
-#    レンダリングが失敗し、不足している値の名前がエラーに含まれる。2.3 で schema
-#    による必須値検証を追加したら、他の必須値についても同様のケースをここへ足す。
+# 3. 必須値を欠くとレンダリングが失敗し、不足している値の名前がエラーに含まれる。
 required_value_missing_fails() {
   local out
   out="$(helm template devplatform . -f "$MINIMAL_VALUES" --set taskQueue.maxConcurrent=null 2>&1)" && return 1
-  grep -q "taskQueue.maxConcurrent" <<<"$out" || return 1
+  grep -q "maxConcurrent" <<<"$out" || return 1
 
   out="$(helm template devplatform . --set gateway.domain=example.internal --set gateway.tls.secretName=null 2>&1)" && return 1
-  grep -q "gateway.tls.secretName" <<<"$out"
+  grep -q "secretName" <<<"$out" || return 1
+
+  # values.schema.json による必須値検証 (2.3)。
+  out="$(helm template devplatform . -f "$MINIMAL_VALUES" --set workspaceTemplate.database.clusterRef= 2>&1)" && return 1
+  grep -q "clusterRef" <<<"$out" || return 1
+
+  out="$(helm template devplatform . -f "$MINIMAL_VALUES" --set infisical.projectId= 2>&1)" && return 1
+  grep -q "projectId" <<<"$out"
 }
 check "rendering fails and names the missing required value" required_value_missing_fails
+
+# 4. 有効にした機能に必要な依存が指定されていない場合、レンダリングが失敗する
+#    (条件付き必須, 3.7/4.10)。ここでは退避先S3資格情報の自動発行を例にする。
+conditional_dependency_missing_fails() {
+  local out
+  out="$(helm template devplatform . -f "$MINIMAL_VALUES" \
+    --set evacuationCredentials.autoProvision.enabled=true \
+    --set evacuationCredentials.autoProvision.garage.namespace= 2>&1)" && return 1
+  grep -q "namespace" <<<"$out"
+}
+check "enabling a feature without its required dependency fails rendering" conditional_dependency_missing_fails
 
 exit $fail

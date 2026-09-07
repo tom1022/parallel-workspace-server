@@ -1,0 +1,174 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "gateway",
+    "workspaceNamespace",
+    "workspaceImage",
+    "workspaceTemplate",
+    "taskQueue",
+    "infisical"
+  ],
+  "properties": {
+    "gateway": {
+      "type": "object",
+      "required": ["domain", "tls", "oidc"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ゲートウェイの公開ドメイン。ワークスペースのホスト名はこの直下の単一ラベルになる。"
+        },
+        "tls": {
+          "type": "object",
+          "required": ["secretName"],
+          "properties": {
+            "secretName": {
+              "type": "string",
+              "minLength": 1,
+              "description": "gateway.domain 宛の TLS 証明書を保持する Secret 名。"
+            }
+          }
+        },
+        "oidc": {
+          "type": "object",
+          "required": ["issuer", "audience", "jwksUrl"],
+          "properties": {
+            "issuer": { "type": "string", "minLength": 1 },
+            "audience": { "type": "string", "minLength": 1 },
+            "jwksUrl": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "workspaceNamespace": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Workspace / WorkspaceTemplate を置くネームスペース。"
+    },
+    "workspaceImage": {
+      "type": "object",
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workspaceTemplate": {
+      "type": "object",
+      "required": ["database", "auth", "evacuation"],
+      "properties": {
+        "database": {
+          "type": "object",
+          "required": ["clusterRef"],
+          "properties": {
+            "clusterRef": {
+              "type": "string",
+              "minLength": 1,
+              "description": "ブランチ専用データベース (Cluster リソース名等) への参照。"
+            }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "required": ["secretRef"],
+          "properties": {
+            "secretRef": { "type": "string", "minLength": 1 }
+          }
+        },
+        "evacuation": {
+          "type": "object",
+          "required": ["bucket", "secretRef"],
+          "properties": {
+            "bucket": { "type": "string", "minLength": 1 },
+            "secretRef": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "taskQueue": {
+      "type": "object",
+      "required": ["maxConcurrent"],
+      "properties": {
+        "maxConcurrent": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "infisical": {
+      "type": "object",
+      "required": ["projectId", "environmentSlug", "secretPath", "authRef"],
+      "properties": {
+        "projectId": { "type": "string", "minLength": 1 },
+        "environmentSlug": { "type": "string", "minLength": 1 },
+        "secretPath": { "type": "string", "minLength": 1 },
+        "authRef": {
+          "type": "object",
+          "required": ["name", "namespace"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "namespace": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "evacuationCredentials": {
+      "type": "object",
+      "properties": {
+        "autoProvision": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "garage": {
+              "type": "object",
+              "properties": {
+                "namespace": { "type": "string" },
+                "podSelector": { "type": "string" },
+                "keyName": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "退避先S3資格情報の自動発行(3.4/3.7)を有効にした場合、発行対象のGarage情報が要る。",
+      "if": {
+        "properties": {
+          "evacuationCredentials": {
+            "properties": {
+              "autoProvision": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              }
+            },
+            "required": ["autoProvision"]
+          }
+        },
+        "required": ["evacuationCredentials"]
+      },
+      "then": {
+        "properties": {
+          "evacuationCredentials": {
+            "properties": {
+              "autoProvision": {
+                "properties": {
+                  "garage": {
+                    "type": "object",
+                    "required": ["namespace", "podSelector", "keyName"],
+                    "properties": {
+                      "namespace": { "type": "string", "minLength": 1 },
+                      "podSelector": { "type": "string", "minLength": 1 },
+                      "keyName": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                },
+                "required": ["garage"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

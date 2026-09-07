@@ -4,3 +4,9 @@ gateway:
   domain: example.internal
   tls:
     secretName: example-gateway-tls
+  oidc:
+    issuer: https://idp.example.internal/oauth2
+    audience: devplatform-gateway
+    jwksUrl: https://idp.example.internal/oauth2/jwks
+infisical:
+  projectId: 00000000-0000-0000-0000-000000000000
