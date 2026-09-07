@@ -1,23 +1,43 @@
 # devplatform
 
-自律並行開発基盤の制御プレーン (Workspace Controller) と共有端末ゲートウェイ
-(Terminal Gateway) を配備する Helm chart。ワークスペース実体 (Workspace CR・
-StatefulSet・PVC・ブランチ専用データベース) はこの chart には含まれず、
+自律的に開発タスクを並行実行するための基盤。エージェント (Claude Code) がブランチ
+ごとに隔離された Kubernetes ワークスペース上で実装・テストを自律的に進め、利用者は
+共有端末ゲートウェイ経由でブラウザや SSH からその進行に立ち会い、必要なら操作を
+引き継げる。
+
+- **Workspace Controller** (`controller/`) — ワークスペース (Workspace CR) の払い出し
+  からタスクキューイング・アイドル検知・退避・破棄までを、ワークスペース専用
+  ネームスペース内に閉じて管理する Kubernetes controller。
+- **Terminal Gateway** (`gateway/`) — ブラウザ・SSH からワークスペースへの経路を提供し、
+  SSH 証明書の発行と OIDC 認可を担う共有端末。
+- **Supervisor** (`supervisor/`) — 各ワークスペース Pod 内で Claude Code セッションを
+  tmux 上に保持し、ヘルスチェック・退避・DB ブートストラップ・テストの自己修復ループを
+  行う。
+
+## 想定する利用場面
+
+複数の開発タスクを並行して隔離されたワークスペースで進めたい運用者が、自分の
+Kubernetes クラスタへこの基盤を配備し、Web ターミナル (または SSH) 経由でエージェント
+駆動の開発を行い、必要に応じて進行を確認・介入する、という使い方を想定している。
+
+この chart 自体は制御プレーンとゲートウェイだけを配備する。ワークスペース実体
+(Workspace CR・StatefulSet・PVC・ブランチ専用データベース) はこの chart には含まれず、
 制御プレーンが実行時に払い出す。
 
 ## 前提となるクラスタ構成
 
-配備前に以下が同じクラスタで動いている必要がある。
+以下は本リポジトリには含まれない、利用者が自分のクラスタに別途用意する必要がある
+依存コンポーネントである。配備前に同じクラスタで動いている必要がある。
 
-| 依存 | 用途 | 本リポジトリ内の定義 |
-|---|---|---|
-| Argo CD + ApplicationSet | `apps/*` の同期 | `apps/argocd/` |
-| Infisical Kubernetes Operator | 利用者が用意する秘匿情報の同期 | `apps/infisical-operator/` |
-| CloudNativePG operator | ブランチ専用データベース | `apps/cnpg-operator/` |
-| Garage (S3 互換) | 作業内容の退避先 | `apps/garage/` |
-| cert-manager + reflector | ワークスペースのホスト名を含むワイルドカード証明書 | `apps/cluster-issuer/` |
-| OIDC 認可サーバ + oauth2-proxy | ゲートウェイの認証 | `apps/kanidm/`, `apps/oauth2-proxy/` |
-| Tailscale operator (任意) | 統合開発環境からの任意経路 (経路 B) | `apps/tailscale-operator/` |
+| 依存 | 用途 |
+|---|---|
+| Argo CD 相当の GitOps 同期の仕組み | マニフェストの同期 |
+| Infisical Kubernetes Operator | 利用者が用意する秘匿情報の同期 |
+| CloudNativePG operator | ブランチ専用データベース |
+| Garage (S3 互換) | 作業内容の退避先 |
+| cert-manager + reflector | ワークスペースのホスト名を含むワイルドカード証明書 |
+| OIDC 認可サーバ + oauth2-proxy | ゲートウェイの認証 |
+| Tailscale operator (任意) | 統合開発環境からの任意経路 (経路 B) |
 
 Tailscale operator だけは `apps/argocd/applicationset.yaml` で exclude してあり、
 既定では Application が生成されない。operator は OAuth クライアント資格情報が無いと
