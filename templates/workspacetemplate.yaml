@@ -39,4 +39,6 @@ spec:
     secretRef: {{ .Values.workspaceTemplate.auth.secretRef }}
   evacuation:
     bucket: {{ .Values.workspaceTemplate.evacuation.bucket }}
+    endpoint: {{ .Values.workspaceTemplate.evacuation.endpoint }}
+    region: {{ .Values.workspaceTemplate.evacuation.region }}
     secretRef: {{ .Values.workspaceTemplate.evacuation.secretRef }}

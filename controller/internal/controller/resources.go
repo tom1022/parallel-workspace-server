@@ -72,13 +72,6 @@ const (
 
 	localPathStorageClass = "local-path"
 
-	// garageS3Endpoint is the in-cluster S3 API of apps/garage. Like the
-	// Traefik/cert-manager facts in ingress_reconciler.go it is a property of
-	// this cluster rather than of a template, so it is pinned here instead of
-	// widening the WorkspaceTemplate schema.
-	garageS3Endpoint = "http://garage.garage.svc.cluster.local:3900"
-	garageS3Region   = "garage"
-
 	// Key names inside the evacuation destination's credential Secret.
 	evacuationAccessKeyKey = "access-key"
 	evacuationSecretKeyKey = "secret-key"
@@ -204,8 +197,8 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 	// Pod spec.
 	evacuationEnv := []corev1.EnvVar{
 		{Name: "WORKSPACE_ID", Value: resourceName},
-		{Name: "EVACUATION_ENDPOINT", Value: garageS3Endpoint},
-		{Name: "EVACUATION_REGION", Value: garageS3Region},
+		{Name: "EVACUATION_ENDPOINT", Value: tmpl.Spec.Evacuation.Endpoint},
+		{Name: "EVACUATION_REGION", Value: tmpl.Spec.Evacuation.Region},
 		{Name: "EVACUATION_BUCKET", Value: tmpl.Spec.Evacuation.Bucket},
 		secretEnv("EVACUATION_ACCESS_KEY", tmpl.Spec.Evacuation.SecretRef, evacuationAccessKeyKey),
 		secretEnv("EVACUATION_SECRET_KEY", tmpl.Spec.Evacuation.SecretRef, evacuationSecretKeyKey),

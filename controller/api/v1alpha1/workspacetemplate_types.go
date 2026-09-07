@@ -61,6 +61,15 @@ type WorkspaceEvacuation struct {
 	// +kubebuilder:validation:MinLength=1
 	Bucket string `json:"bucket"`
 
+	// Endpoint is the destination's S3-compatible API endpoint (e.g.
+	// http://host:port), not fixed to any particular implementation.
+	// +kubebuilder:validation:MinLength=1
+	Endpoint string `json:"endpoint"`
+
+	// Region is the bucket's region.
+	// +kubebuilder:validation:MinLength=1
+	Region string `json:"region"`
+
 	// SecretRef names the Secret holding the destination's S3 credentials
 	// (keys access-key and secret-key). Only the workspace Pod reads them:
 	// the control plane asks for an evacuation but never performs one.
@@ -83,10 +92,10 @@ type WorkspaceTemplateSpec struct {
 	// +optional
 	Storage WorkspaceStorage `json:"storage,omitempty"`
 
-	// NodeName is the placement node. local-path PVCs are node-pinned, so this
-	// is set explicitly rather than left to the scheduler and cannot change
-	// after a workspace has been provisioned from this template.
-	// +kubebuilder:default="k3s-agent-z440"
+	// NodeName is the placement node. local-path PVCs are node-pinned, so a
+	// template using one has to set this explicitly; it cannot change after a
+	// workspace has been provisioned from this template. Empty imposes no
+	// placement constraint and leaves it to the scheduler.
 	// +optional
 	NodeName string `json:"nodeName,omitempty"`
 

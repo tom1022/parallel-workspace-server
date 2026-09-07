@@ -112,6 +112,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `workspaceTemplate.database.clusterRef` | ブランチ専用データベースへの参照名 | なし | **必須** |
 | `workspaceTemplate.auth.secretRef` | Claude Code 長期認証情報を保持する Secret 名 | なし | **必須** |
 | `workspaceTemplate.evacuation.bucket`/`secretRef` | 退避先バケット名・S3 資格情報 Secret 名 | なし | **必須** |
+| `workspaceTemplate.evacuation.endpoint`/`region` | 退避先の S3 互換エンドポイント・リージョン。特定の実装に固定しない | この chart が同梱する Garage のクラスタ内エンドポイント | **必須**。別の S3 互換実装を使う場合はここを差し替える |
 | `taskQueue.maxConcurrent` | 同時実行 Claude Code タスク数の上限 | `2` | **必須** |
 | `taskQueue.modelFallbacks` | モデル別利用枠が尽きたときの切り替え順 | `[]` (切り替えない) | 省略可 |
 | `workspaceQuota.*` | ワークスペース用ネームスペースの ResourceQuota | クラスタ数個分の保守的な値 | 省略可 |
@@ -177,9 +178,7 @@ Prune=false,Delete=false` を付け、一律の prune/selfHeal から守って�
   の 2 キーで用意する。Infisical から同期するなら `infisical.evacuation.enabled: true`
   にして `DEVPLATFORM_EVACUATION_ACCESS_KEY_ID` と
   `DEVPLATFORM_EVACUATION_SECRET_ACCESS_KEY` を登録する。外部 S3 を退避先にする場合は
-  併せて `workspaceTemplate.evacuation.bucket` と、S3 エンドポイントの指定
-  (`controller/internal/controller/resources.go` 参照。現状は差し替え可能になっていない) を
-  配備先に合わせる。
+  併せて `workspaceTemplate.evacuation.bucket`/`endpoint`/`region` を配備先に合わせる。
 - **データベース**: 利用するデータベースオペレータ側の設定で、生成される
   superuser Secret を指定の Secret に差し替える。
 

@@ -172,6 +172,12 @@ workspaceTemplate:
     secretRef: devplatform-workspace-claude-auth
   evacuation:
     bucket: workspace
+    # 退避先の S3 互換エンドポイントとリージョン。特定の実装に固定されておらず、
+    # 別の S3 互換ストレージを使う運用者はこの2値を差し替えればよい。既定は
+    # controller.image.repository 等と同じ扱いで、この chart が同梱する
+    # apps/garage のクラスタ内エンドポイントを指す (chart 自体を縛るものではない)。
+    endpoint: http://garage.garage.svc.cluster.local:3900
+    region: garage
     # 退避先の S3 資格情報を保持する Secret。既定では evacuationCredentials が
     # クラスタ内 Garage の鍵を発行して作る。外部 S3 を使う運用者は autoProvision を
     # 無効にし、同名の Secret を access-key / secret-key の 2 キーで自分で用意する。

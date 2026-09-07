@@ -8,5 +8,10 @@ gateway:
     issuer: https://idp.example.internal/oauth2
     audience: devplatform-gateway
     jwksUrl: https://idp.example.internal/oauth2/jwks
+# 提供元のクラスタ内実装 (Garage) ではない、別の S3 互換実装を指定できることを示す (3.4)。
+workspaceTemplate:
+  evacuation:
+    endpoint: https://s3.example.internal
+    region: us-east-1
 # infisical は既定 (enabled: false) のままにする。Infisical Operator を導入していない
 # クラスタでも成立することを最小構成として示す (3.3)。

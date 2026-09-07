@@ -98,9 +98,11 @@
         },
         "evacuation": {
           "type": "object",
-          "required": ["bucket", "secretRef"],
+          "required": ["bucket", "endpoint", "region", "secretRef"],
           "properties": {
             "bucket": { "type": "string", "minLength": 1 },
+            "endpoint": { "type": "string", "minLength": 1 },
+            "region": { "type": "string", "minLength": 1 },
             "secretRef": { "type": "string", "minLength": 1 }
           }
         }

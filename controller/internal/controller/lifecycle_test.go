@@ -346,7 +346,7 @@ func createTemplateOnNode(t *testing.T, ctx context.Context, ns, name, nodeName 
 			NodeName:   nodeName,
 			Database:   devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 			Auth:       devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
-			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", SecretRef: "garage-evacuation-credentials"},
+			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", Endpoint: "http://garage.garage.svc.cluster.local:3900", Region: "garage", SecretRef: "garage-evacuation-credentials"},
 		},
 	}
 	if err := testClient.Create(ctx, tmpl); err != nil {

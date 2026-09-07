@@ -225,6 +225,8 @@ func TestBuildStatefulSet_PassesEvacuationConfigToTheWorkspace(t *testing.T) {
 			Auth:      devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
 			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{
 				Bucket:    "workspace",
+				Endpoint:  "https://s3.example.internal",
+				Region:    "us-east-1",
 				SecretRef: "garage-evacuation-credentials",
 			},
 		},
@@ -245,8 +247,14 @@ func TestBuildStatefulSet_PassesEvacuationConfigToTheWorkspace(t *testing.T) {
 	if got := env["EVACUATION_BUCKET"].Value; got != "workspace" {
 		t.Errorf("EVACUATION_BUCKET = %q", got)
 	}
-	if env["EVACUATION_ENDPOINT"].Value == "" {
-		t.Error("EVACUATION_ENDPOINT is unset")
+	// 3.4: the destination is not fixed to the in-cluster implementation —
+	// an operator-supplied, non-Garage endpoint/region must pass through
+	// unchanged rather than being overridden by a built-in default.
+	if got := env["EVACUATION_ENDPOINT"].Value; got != "https://s3.example.internal" {
+		t.Errorf("EVACUATION_ENDPOINT = %q, want the template's own endpoint", got)
+	}
+	if got := env["EVACUATION_REGION"].Value; got != "us-east-1" {
+		t.Errorf("EVACUATION_REGION = %q, want the template's own region", got)
 	}
 	for _, name := range []string{"EVACUATION_ACCESS_KEY", "EVACUATION_SECRET_KEY"} {
 		src := env[name].ValueFrom
@@ -279,6 +287,8 @@ func TestBuildStatefulSet_InitContainerRestoresEvacuatedWork(t *testing.T) {
 			Auth:      devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
 			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{
 				Bucket:    "workspace",
+				Endpoint:  "https://s3.example.internal",
+				Region:    "us-east-1",
 				SecretRef: "garage-evacuation-credentials",
 			},
 		},
@@ -303,8 +313,11 @@ func TestBuildStatefulSet_InitContainerRestoresEvacuatedWork(t *testing.T) {
 	if got := env["EVACUATION_BUCKET"].Value; got != "workspace" {
 		t.Errorf("init EVACUATION_BUCKET = %q", got)
 	}
-	if env["EVACUATION_ENDPOINT"].Value == "" {
-		t.Error("init EVACUATION_ENDPOINT is unset")
+	if got := env["EVACUATION_ENDPOINT"].Value; got != "https://s3.example.internal" {
+		t.Errorf("init EVACUATION_ENDPOINT = %q, want the template's own endpoint", got)
+	}
+	if got := env["EVACUATION_REGION"].Value; got != "us-east-1" {
+		t.Errorf("init EVACUATION_REGION = %q, want the template's own region", got)
 	}
 	for _, name := range []string{"EVACUATION_ACCESS_KEY", "EVACUATION_SECRET_KEY"} {
 		src := env[name].ValueFrom
