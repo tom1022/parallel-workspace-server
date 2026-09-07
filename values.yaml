@@ -19,14 +19,15 @@ controller:
       memory: "64Mi"
     limits:
       memory: "128Mi"
-  # ワークスペースの配置ノード (k3s-agent-z440、apps/garage と同一) に固定し、
-  # 制御プレーンとワークスペース間のノード外ネットワーク越しレイテンシを避ける。
-  nodeSelector:
-    kubernetes.io/hostname: k3s-agent-z440
+  # 配置ノードを固定したい場合に指定する (例: ワークスペースと同一ノードに置き
+  # ノード外ネットワーク越しレイテンシを避ける)。省略時は配置制約を課さず、
+  # スケジューラに任せる。
+  nodeSelector: {}
   persistence:
     enabled: false
     name: devplatform-controller-data
-    storageClass: local-path
+    # 省略時はクラスタの既定 StorageClass を使う。
+    storageClass: ""
     size: 1Gi
 
 # Terminal Gateway (共有端末ゲートウェイ)。ホスト名解決を都度 Kubernetes API へ
@@ -42,18 +43,21 @@ gateway:
   # ステートレスなので増やせるが、単一障害点の緩和は運用判断 (design.md の Risks)。
   replicas: 1
   port: 8080
-  # ワイルドカード証明書 tls-fickledev-com が適用されるゾーン。ホスト名は必ずこの直下の
-  # 単一ラベルにする (11.2)。
-  domain: fickledev.com
+  # 公開ドメイン。ワークスペースのホスト名はこの直下の単一ラベルになる (11.2)。必須。
+  domain: ""
   # /api/ 配下の受け口となるホスト名 (単一ラベル)。forward auth を挟まず Bearer を
   # ゲートウェイまで素通しさせる対象をこのホスト名だけに限定する (4.12)。
   apiHost: devworkspaces
-  # Bearer JWT の検証パラメータ。audience は Kanidm 側のクライアント識別子と一致させる。
-  # Kanidm はクライアントごとに異なる issuer URL を発行する (apps/oauth2-proxy 参照)。
+  # ドメインへ張る TLS 証明書を保持する Secret 名。routing.traefik を使う場合に必須
+  # (cert-manager + reflector 等でこのネームスペースへ複製しておく)。
+  tls:
+    secretName: ""
+  # Bearer JWT の検証パラメータ。audience は外部 IdP 側のクライアント識別子と
+  # 一致させる。必須 (4.x でローカル認証と併用/差し替え可能にする予定)。
   oidc:
-    issuer: https://kanidm.fickledev.com/oauth2/openid/devplatform-gateway
-    audience: devplatform-gateway
-    jwksUrl: https://kanidm.fickledev.com/oauth2/openid/devplatform-gateway/public_key.jwk
+    issuer: ""
+    audience: ""
+    jwksUrl: ""
   # SSH 認証局。鍵ペアはゲートウェイが起動時にクラスタ内で確定させる (外部に発行元が
   # 存在しないため配備時の手作業を要求しない)。秘密鍵はこのリリースのネームスペースに
   # 留め、公開鍵だけをワークスペース専用ネームスペースへ書き出す。既に caSecretName の
@@ -74,8 +78,21 @@ gateway:
       memory: "64Mi"
     limits:
       memory: "128Mi"
-  nodeSelector:
-    kubernetes.io/hostname: k3s-agent-z440
+  nodeSelector: {}
+
+# ゲートウェイの受け口 (IngressRoute) と、ワークスペースのプレビュー/レポートポートへの
+# 到達経路 (workspace-networkpolicy.yaml) が参照するルーティング設定。既定値は Traefik が
+# kube-system に常駐する構成 (k3s 既定) を前提にしている。
+routing:
+  # Traefik IngressRoute の中間処理参照 (完全修飾名、例: "name@kubernetescrd")。
+  # 空リストの間は付与しない。
+  workspaceMiddlewares: []
+  apiMiddlewares: []
+  # ルーティング実装 (例: Traefik) が常駐するネームスペースと Pod セレクタ。
+  # ingressNamespace を空にすると、その実装からワークスペースへの到達経路を許可しない。
+  ingressNamespace: kube-system
+  ingressPodSelector:
+    app.kubernetes.io/name: traefik
 
 # ワークスペース専用ネームスペース名。Workspace / WorkspaceTemplate はここに置く。
 # workspace-namespace.yaml (後続タスク) と controller-rbac.yaml のスコープもここを参照する。
@@ -85,10 +102,23 @@ gateway:
 # 置くと同じ RBAC で参照できなくなる。
 workspaceNamespace: devplatform-workspaces
 
-# 統合開発環境からの任意経路 (4.7) の単一到達点である subnet router が居るネームスペース
-# (apps/tailscale-operator)。workspace-networkpolicy.yaml が、ワークスペース Pod の sshd へ
-# 到達してよい唯一の外部ネームスペースとして参照する。
-subnetRouterNamespace: tailscale-operator
+# 統合開発環境からの任意経路 (4.7) の単一到達点である subnet router が居るネームスペース。
+# workspace-networkpolicy.yaml が、ワークスペース Pod の sshd へ到達してよい唯一の
+# 外部ネームスペースとして参照する。空文字の間はこの経路を許可しない (課さない)。
+subnetRouterNamespace: ""
+
+# ワークスペース専用ネームスペースの NetworkPolicy が egress 先として参照するネームスペース。
+# 空文字の間は対応する egress 規則を生成しない (依存を無効化できる、3.5/3.4)。
+database:
+  namespace: devplatform-db
+objectStorage:
+  namespace: garage
+
+# クラスタの Pod/Service アドレス範囲。workspace-networkpolicy.yaml の egress で、
+# 外部への到達許可 (443/53) からクラスタ内部向けを除外するために使う。
+# 指定しない間は除外を行わない (課さない、2.4)。
+network:
+  excludeCIDRs: []
 
 # 既定の WorkspaceTemplate 実体 (GitOps 管理、17.4)。払い出しに使うイメージ参照は
 # workspaceImage (下記) から組み立てる: 事前配置 (image-prestage-daemonset.yaml) と
@@ -113,7 +143,9 @@ workspaceTemplate:
     # nodeName の全ワークスペース合計に対するディスク予算 (15.11)。既定の workspaceQuota.maxPods
     # (5) x size (22Gi) を賄える値。実測ではなく宣言値 (size) 合計での近似判定。
     nodeDiskBudget: 110Gi
-  nodeName: k3s-agent-z440
+  # 配置先ノードを固定したい場合に指定する (local-path PVC はノード固定のため)。
+  # 省略時はこの制約を課さない。
+  nodeName: ""
   priorityClassName: devplatform-workspace
   # 各ワークスペースの既定モデル (7.3)。空文字の間は Claude Code 自身の既定モデルを用いる。
   # 設定するとワークスペース Pod へ ANTHROPIC_MODEL として渡る。
@@ -175,10 +207,10 @@ evacuationCredentials:
         memory: "64Mi"
 
 # 秘匿情報の同期定義 (14.4/14.5)。projectId/environmentSlug/secretPath/authRef は
-# 他 Helm chart (apps/garage 等) と同じ全アプリ共通の Infisical プロジェクトを指し、
-# この 1 箇所にのみ実体を置く。infisical-secret.yaml が参照する。
+# 利用する Infisical プロジェクトを指し、この 1 箇所にのみ実体を置く。
+# infisical-secret.yaml が参照する。
 infisical:
-  projectId: "59f7eabf-94e5-49d0-85ed-975dfdf27f11"
+  projectId: ""
   environmentSlug: prod
   secretPath: "/"
   authRef:

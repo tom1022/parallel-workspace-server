@@ -52,40 +52,50 @@ spec:
       ports:
         - protocol: TCP
           port: 8787
+    {{- with .Values.subnetRouterNamespace }}
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.subnetRouterNamespace }}
+              kubernetes.io/metadata.name: {{ . }}
       ports:
         - protocol: TCP
           port: 22
+    {{- end }}
+    {{- with .Values.routing.ingressNamespace }}
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: kube-system
+              kubernetes.io/metadata.name: {{ . }}
+          {{- with $.Values.routing.ingressPodSelector }}
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: traefik
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
       ports:
         - protocol: TCP
           port: 3000
         - protocol: TCP
           port: 8080
+    {{- end }}
   egress:
+    {{- with .Values.database.namespace }}
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: devplatform-db
+              kubernetes.io/metadata.name: {{ . }}
       ports:
         - protocol: TCP
           port: 5432
+    {{- end }}
+    {{- with .Values.objectStorage.namespace }}
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: garage
+              kubernetes.io/metadata.name: {{ . }}
       ports:
         - protocol: TCP
           port: 3900
+    {{- end }}
     - to:
         - namespaceSelector:
             matchLabels:
@@ -100,9 +110,10 @@ spec:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            {{- with .Values.network.excludeCIDRs }}
             except:
-              - 10.42.0.0/16
-              - 10.43.0.0/16
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
       ports:
         - protocol: TCP
           port: 443

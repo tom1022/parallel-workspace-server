@@ -1,15 +1,16 @@
 ---
-# ワークスペースのホスト名 (fickledev.com 直下の単一ラベル) をまとめてゲートウェイへ
+# ワークスペースのホスト名 (gateway.domain 直下の単一ラベル) をまとめてゲートウェイへ
 # 向ける受け口。ワークスペースごとの接続先ルートを Workspace Controller が作らないのは
 # このためで、払い出し・破棄でルーティング定義が増減しない (11.4)。
 #
 # priority を明示的に最小値にする: Traefik は既定でルール文字列長を priority とするため、
-# 既存アプリの Host(`...`) ルートより確実に後段へ落とす。ここに落ちてくる未定義の
+# 他の Host(`...`) ルートより確実に後段へ落とす。ここに落ちてくる未定義の
 # ホスト名にはゲートウェイが 404 を返す。
 #
-# 認証は既存の forward auth 経路へ委ね、ゲートウェイ自身では実装しない (4.6/4.9/11.5)。
-# Middleware は Chain 自身の namespace ではなく参照側の namespace を起点に解決されるため、
-# CRD プロバイダの修飾名で指定する (apps/common/middlewares.yaml 参照)。
+# 認証は routing.workspaceMiddlewares/apiMiddlewares に指定した中間処理へ委ねられる
+# (利用者が forward auth 等を組む場合の口)。Middleware は Chain 自身の namespace ではなく
+# 参照側の namespace を起点に解決されるため、値には CRD プロバイダの修飾名
+# (例: "name@kubernetescrd") で指定する。
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -24,13 +25,17 @@ spec:
     - kind: Rule
       match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.gateway.domain | replace "." "\\." }}$`)
       priority: 1
+      {{- with .Values.routing.workspaceMiddlewares }}
       middlewares:
-        - name: argocd-forward-auth-chain@kubernetescrd
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
       services:
         - name: devplatform-gateway
           port: {{ .Values.gateway.port }}
   tls:
-    secretName: tls-fickledev-com
+    secretName: {{ required "gateway.tls.secretName must be set" .Values.gateway.tls.secretName }}
 ---
 # 統合開発環境向け制御面 (/api/) の受け口。ワークスペース側と同じ前段 (偽装ヘッダの除去 →
 # 接続元アドレス制限 → forward auth) を通すが、forward auth は Authorization を判定
@@ -54,12 +59,14 @@ spec:
   routes:
     - kind: Rule
       match: Host(`{{ .Values.gateway.apiHost }}.{{ .Values.gateway.domain }}`)
+      {{- with .Values.routing.apiMiddlewares }}
       middlewares:
-        - name: argocd-strip-auth-headers@kubernetescrd
-        - name: argocd-local-whitelist@kubernetescrd
-        - name: oauth2-proxy-forward-auth-bearer@kubernetescrd
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
       services:
         - name: devplatform-gateway
           port: {{ .Values.gateway.port }}
   tls:
-    secretName: tls-fickledev-com
+    secretName: {{ required "gateway.tls.secretName must be set" .Values.gateway.tls.secretName }}

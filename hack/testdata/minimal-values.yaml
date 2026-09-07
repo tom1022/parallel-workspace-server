@@ -1,0 +1,6 @@
+# 可搬性検査 (hack/portability-check.sh) 用の最小構成。
+# 提供元の環境固有値を一切含まない、利用者が用意したと想定する値のみを置く。
+gateway:
+  domain: example.internal
+  tls:
+    secretName: example-gateway-tls
