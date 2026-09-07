@@ -1,9 +1,8 @@
 ---
 # ワークスペース操作用 ServiceAccount。Workspace Controller Pod (devplatform namespace) が
 # mount するため Release.Namespace 側に置き、実際の権限は workspaceNamespace 側の
-# Role/RoleBinding (下記) で束縛する。後続タスク 9.9 で Hermes Agent がこの SA (または同じ
-# Role を束縛した別 SA) を参照する想定のため、名前は用途がわかる devplatform-workspace-operator
-# のままにする。
+# Role/RoleBinding (下記) で束縛する。Hermes Agent は Secret 全般や実体の書き換えまで持つ
+# この権限を共用せず、apps/hermes-agent が自前の SA を別に持つ。
 apiVersion: v1
 kind: ServiceAccount
 metadata:
