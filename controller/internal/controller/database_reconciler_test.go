@@ -11,11 +11,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/database"
 )
 
 func getDatabase(t *testing.T, ctx context.Context, ns, name string) *unstructured.Unstructured {
 	t.Helper()
-	db := databaseRef(ns, name)
+	db := database.CNPGDatabaseRef(ns, name)
 	if err := testClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, db); err != nil {
 		t.Fatalf("get Database %s: %v", name, err)
 	}
@@ -24,7 +25,7 @@ func getDatabase(t *testing.T, ctx context.Context, ns, name string) *unstructur
 
 func getDatabaseRole(t *testing.T, ctx context.Context, ns, name string) *unstructured.Unstructured {
 	t.Helper()
-	role := databaseRoleRef(ns, name)
+	role := database.CNPGDatabaseRoleRef(ns, name)
 	if err := testClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, role); err != nil {
 		t.Fatalf("get DatabaseRole %s: %v", name, err)
 	}
@@ -159,10 +160,10 @@ func TestReconcile_FailsAndRollsBackDeletesDatabase(t *testing.T) {
 	}
 	resourceName := ws.Status.WorkspaceId
 
-	if err := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, databaseRef(ns, resourceName)); !apierrors.IsNotFound(err) {
+	if err := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, database.CNPGDatabaseRef(ns, resourceName)); !apierrors.IsNotFound(err) {
 		t.Errorf("expected Database %s deleted after rollback, get err = %v", resourceName, err)
 	}
-	if err := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, databaseRoleRef(ns, resourceName)); !apierrors.IsNotFound(err) {
+	if err := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, database.CNPGDatabaseRoleRef(ns, resourceName)); !apierrors.IsNotFound(err) {
 		t.Errorf("expected DatabaseRole %s deleted after rollback, get err = %v", resourceName, err)
 	}
 }

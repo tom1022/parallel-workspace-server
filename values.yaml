@@ -166,7 +166,15 @@ workspaceTemplate:
   # 各ワークスペースの既定モデル (7.3)。空文字の間は Claude Code 自身の既定モデルを用いる。
   # 設定するとワークスペース Pod へ ANTHROPIC_MODEL として渡る。
   model: ""
+  # ブランチ専用データベースを使うか (3.4/3.5)。true (既定) では下の clusterRef が必須になり、
+  # この chart が配備する WorkspaceTemplate に spec.database が含まれ、コントローラは
+  # 実際に CNPG の Database/DatabaseRole を生成する。false ではその生成自体を行わず (Database
+  # Adapter が no-op 実装になる)、spec.database も省略されるため、ワークスペースはデータベース
+  # なしで払い出される。egress 許可先を指すだけの database.namespace (上の方、NetworkPolicy 用)
+  # とは別の関心事: この機能自体を無効にする場合は database.namespace も空にして egress 規則自体
+  # を無くすとよい (残しても実害はないが、無関係な許可が残る)。
   database:
+    enabled: true
     clusterRef: devplatform-db
   auth:
     secretRef: devplatform-workspace-claude-auth

@@ -80,12 +80,15 @@
       "properties": {
         "database": {
           "type": "object",
-          "required": ["clusterRef"],
           "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "ブランチ専用データベースを使うか (3.4/3.5)。既定 true。false ではこの chart が payload とする WorkspaceTemplate に spec.database を含めず、コントローラは CNPG 資源を一切生成しない (DatabaseAdapter が no-op 実装になる) — ワークスペースはデータベースなしで払い出される。egress 許可先を指す独立の値である database.namespace とは別の関心事 (README 参照)。"
+            },
             "clusterRef": {
               "type": "string",
               "minLength": 1,
-              "description": "ブランチ専用データベース (Cluster リソース名等) への参照。"
+              "description": "ブランチ専用データベース (Cluster リソース名等) への参照。enabled: true のときだけ必須 (下の allOf)。"
             }
           }
         },
@@ -155,6 +158,37 @@
     }
   },
   "allOf": [
+    {
+      "$comment": "ブランチ専用データベースを使う場合(workspaceTemplate.database.enabled、既定true)、参照先クラスタ名が要る(3.4/3.5)。",
+      "if": {
+        "properties": {
+          "workspaceTemplate": {
+            "properties": {
+              "database": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              }
+            },
+            "required": ["database"]
+          }
+        },
+        "required": ["workspaceTemplate"]
+      },
+      "then": {
+        "properties": {
+          "workspaceTemplate": {
+            "properties": {
+              "database": {
+                "required": ["clusterRef"],
+                "properties": {
+                  "clusterRef": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     {
       "$comment": "秘匿情報同期にInfisical Operatorを使う場合(infisical.enabled=true)、接続先プロジェクトの情報が要る(3.3)。",
       "if": {

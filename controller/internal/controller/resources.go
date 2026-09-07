@@ -204,6 +204,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		secretEnv("EVACUATION_SECRET_KEY", tmpl.Spec.Evacuation.SecretRef, evacuationSecretKeyKey),
 	}
 
+	dbEnabled := tmpl.Spec.Database != nil
 	databaseEnv := branchDatabaseEnv(ws, tmpl, resourceName)
 
 	initEnv := append([]corev1.EnvVar{
@@ -255,17 +256,6 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 			},
 		},
 		{
-			Name: databaseCertVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: resourceName + databaseCertSecretName,
-					// libpq refuses a private key readable by anyone but its
-					// owner, and a Secret volume is 0644 by default.
-					DefaultMode: ptr(int32(0o600)),
-				},
-			},
-		},
-		{
 			Name: sshCAVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
@@ -292,9 +282,51 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 	volumeMounts := []corev1.VolumeMount{
 		{Name: workspaceVolumeName, MountPath: workspaceMountPath},
 		{Name: authSecretVolumeName, MountPath: authMountPath, ReadOnly: true},
-		{Name: databaseCertVolumeName, MountPath: databaseCertMountPath, ReadOnly: true},
 		{Name: sshCAVolumeName, MountPath: sshCAMountPath, ReadOnly: true},
 		{Name: blackboardVolumeName, MountPath: blackboardMountPath, ReadOnly: true},
+	}
+	// The branch role's TLS client certificate only exists when a database
+	// is configured for this template (Requirement 3.5); mounting it also
+	// gates the Pod on the role actually existing (see databaseCertVolumeName's
+	// doc comment), so it must not appear at all when there is no role to
+	// wait on.
+	if dbEnabled {
+		volumes = append(volumes, corev1.Volume{
+			Name: databaseCertVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: resourceName + databaseCertSecretName,
+					// libpq refuses a private key readable by anyone but its
+					// owner, and a Secret volume is 0644 by default.
+					DefaultMode: ptr(int32(0o600)),
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{Name: databaseCertVolumeName, MountPath: databaseCertMountPath, ReadOnly: true})
+	}
+
+	initContainers := []corev1.Container{
+		{
+			Name:         "workspace-init",
+			Image:        tmpl.Spec.Image,
+			Command:      []string{"sh", "-c", workspaceInitScript},
+			Env:          initEnv,
+			VolumeMounts: volumeMounts,
+		},
+	}
+	if dbEnabled {
+		// Second, because it reads the repository's own declaration of how
+		// it migrates out of the checkout the container above produces, and
+		// the schema has to be in place before the session is handed the
+		// branch (8.5). Omitted entirely without a database (Requirement
+		// 3.5): there is no schema to bootstrap.
+		initContainers = append(initContainers, corev1.Container{
+			Name:         "db-bootstrap",
+			Image:        tmpl.Spec.Image,
+			Command:      []string{supervisorBinaryPath, "dbboot"},
+			Env:          append(append([]corev1.EnvVar{}, initEnv...), databaseEnv...),
+			VolumeMounts: volumeMounts,
+		})
 	}
 
 	replicas := int32(1)
@@ -315,27 +347,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 				Spec: corev1.PodSpec{
 					NodeSelector:      map[string]string{"kubernetes.io/hostname": tmpl.Spec.NodeName},
 					PriorityClassName: tmpl.Spec.PriorityClassName,
-					InitContainers: []corev1.Container{
-						{
-							Name:         "workspace-init",
-							Image:        tmpl.Spec.Image,
-							Command:      []string{"sh", "-c", workspaceInitScript},
-							Env:          initEnv,
-							VolumeMounts: volumeMounts,
-						},
-						// Second, because it reads the repository's own
-						// declaration of how it migrates out of the checkout
-						// the container above produces, and the schema has to
-						// be in place before the session is handed the branch
-						// (8.5).
-						{
-							Name:         "db-bootstrap",
-							Image:        tmpl.Spec.Image,
-							Command:      []string{supervisorBinaryPath, "dbboot"},
-							Env:          append(append([]corev1.EnvVar{}, initEnv...), databaseEnv...),
-							VolumeMounts: volumeMounts,
-						},
-					},
+					InitContainers:    initContainers,
 					Containers: []corev1.Container{
 						{
 							Name:    "workspace",
@@ -372,6 +384,11 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 // authenticates us to the server, and verifying the server in turn would mean
 // mounting the cluster CA as a second Secret for an in-cluster hop.
 func branchDatabaseEnv(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alpha1.WorkspaceTemplate, resourceName string) []corev1.EnvVar {
+	// nil means this template provisions workspaces without a branch
+	// database at all (Requirement 3.5) — no connection to describe.
+	if tmpl.Spec.Database == nil {
+		return nil
+	}
 	host := fmt.Sprintf("%s-rw.%s.svc.cluster.local", tmpl.Spec.Database.ClusterRef, ws.Namespace)
 	cert := databaseCertMountPath + "/tls.crt"
 	key := databaseCertMountPath + "/tls.key"

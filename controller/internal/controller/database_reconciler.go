@@ -1,103 +1,43 @@
-// This file covers task 2.2: the branch-dedicated CNPG Database and
-// DatabaseRole (design.md "Workspace Controller" Implementation Notes,
-// Requirement 8.2/8.9/8.10). No typed Go API for CNPG is vendored into this
-// module, so these are built as unstructured.Unstructured against the exact
-// field names in the CRDs this cluster runs (apps/cnpg-operator/cnpg-operator.yaml).
+// This file covers task 3.4: making the branch-dedicated database optional
+// through a pluggable DatabaseAdapter (design.md "Database Adapter",
+// Requirement 3.5, internal/adapter/database), mirroring task 3.1's
+// RoutingAdapter. The reconciler asks the adapter for "the branch database"
+// without knowing whether it generates CNPG resources or nothing at all. A
+// WorkspaceTemplate with no database configured (Spec.Database == nil) skips
+// the adapter entirely — resources.go reads the same nil to omit the
+// database volume/env/init container from the StatefulSet.
 package controller
 
 import (
 	"context"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/database"
 )
 
-const (
-	cnpgAPIVersion       = "postgresql.cnpg.io/v1"
-	cnpgDatabaseKind     = "Database"
-	cnpgDatabaseRoleKind = "DatabaseRole"
-)
-
-func databaseRef(namespace, name string) *unstructured.Unstructured {
-	u := &unstructured.Unstructured{}
-	u.SetAPIVersion(cnpgAPIVersion)
-	u.SetKind(cnpgDatabaseKind)
-	u.SetName(name)
-	u.SetNamespace(namespace)
-	return u
-}
-
-func databaseRoleRef(namespace, name string) *unstructured.Unstructured {
-	u := &unstructured.Unstructured{}
-	u.SetAPIVersion(cnpgAPIVersion)
-	u.SetKind(cnpgDatabaseRoleKind)
-	u.SetName(name)
-	u.SetNamespace(namespace)
-	return u
-}
-
-// buildDatabaseRole grants the branch its own login instead of sharing
-// devplatform-db's superuser. login+clientCertificate.enabled makes CNPG
-// auto-issue a TLS client certificate into a "<name>-client-cert" Secret
-// (the CRD's own auto-generated connection credential mechanism); no
-// passwordSecret is set (8.2).
-func buildDatabaseRole(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alpha1.WorkspaceTemplate, resourceName string) *unstructured.Unstructured {
-	role := databaseRoleRef(ws.Namespace, resourceName)
-	role.SetLabels(workspaceLabels(ws))
-	role.Object["spec"] = map[string]interface{}{
-		"cluster": map[string]interface{}{"name": tmpl.Spec.Database.ClusterRef},
-		"name":    resourceName,
-		"login":   true,
-		"clientCertificate": map[string]interface{}{
-			"enabled": true,
-		},
-		"ensure": "present",
-		// A role reclaim policy of "delete" is required here, not just on the
-		// Database: the Database's owner (below) references this role by
-		// name, so leaving it "retain" would orphan a role no branch owns.
-		"databaseRoleReclaimPolicy": "delete",
+// databaseTarget builds the DatabaseAdapter request for ws/resourceName.
+// Release only reads Namespace/Name (see DatabaseTarget), so callers that
+// only need to identify already-generated resources for cleanup
+// (failAndRollback) can use this with clusterRef left empty, even when
+// Ensure was never called for this workspace.
+func (r *WorkspaceReconciler) databaseTarget(ws *devplatformv1alpha1.Workspace, resourceName, clusterRef string) database.DatabaseTarget {
+	return database.DatabaseTarget{
+		WorkspaceName: ws.Name,
+		WorkspaceUID:  ws.UID,
+		Namespace:     ws.Namespace,
+		Name:          resourceName,
+		ClusterRef:    clusterRef,
+		Labels:        workspaceLabels(ws),
 	}
-	return role
 }
 
-// buildDatabase is owned by the DatabaseRole created above rather than the
-// cluster superuser, so each branch's connection credential is scoped to its
-// own database (8.2). databaseReclaimPolicy: delete is what makes destroying
-// the Workspace (13.6/8.9) drop the real Postgres database, not just the k8s
-// object.
-func buildDatabase(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alpha1.WorkspaceTemplate, resourceName string) *unstructured.Unstructured {
-	db := databaseRef(ws.Namespace, resourceName)
-	db.SetLabels(workspaceLabels(ws))
-	db.Object["spec"] = map[string]interface{}{
-		"cluster":               map[string]interface{}{"name": tmpl.Spec.Database.ClusterRef},
-		"name":                  resourceName,
-		"owner":                 resourceName,
-		"ensure":                "present",
-		"databaseReclaimPolicy": "delete",
-	}
-	return db
-}
-
-// reconcileDatabase creates the branch's Database/DatabaseRole if missing.
-// Both carry an OwnerReference to ws (like the PVC/StatefulSet already do),
-// so Kubernetes' own garbage collector deletes them only when ws itself is
-// deleted — never on a phase transition to Suspended, which leaves ws alive
-// and simply idles its StatefulSet (8.10). This reconciler does not wait for
-// CNPG to report the Database "Applied": that belongs to DB Bootstrap (8.5-8.8).
+// reconcileDatabase provisions the branch's database through whichever
+// DatabaseAdapter this deployment selected, unless tmpl opts the template
+// out of having one at all (Requirement 3.5).
 func (r *WorkspaceReconciler) reconcileDatabase(ctx context.Context, ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alpha1.WorkspaceTemplate, resourceName string) error {
-	role := buildDatabaseRole(ws, tmpl, resourceName)
-	if err := controllerutil.SetControllerReference(ws, role, r.Scheme); err != nil {
-		return err
+	if tmpl.Spec.Database == nil {
+		return nil
 	}
-	if err := r.ensureCreated(ctx, role); err != nil {
-		return err
-	}
-
-	db := buildDatabase(ws, tmpl, resourceName)
-	if err := controllerutil.SetControllerReference(ws, db, r.Scheme); err != nil {
-		return err
-	}
-	return r.ensureCreated(ctx, db)
+	_, err := r.DatabaseAdapter.Ensure(ctx, r.databaseTarget(ws, resourceName, tmpl.Spec.Database.ClusterRef))
+	return err
 }

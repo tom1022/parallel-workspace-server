@@ -65,7 +65,7 @@ func TestReconcile_HoldsForImageNotStaged(t *testing.T) {
 			},
 			Storage:    devplatformv1alpha1.WorkspaceStorage{Size: "1Gi"},
 			NodeName:   "node-without-prestage",
-			Database:   devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
+			Database:   &devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 			Auth:       devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
 			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", Endpoint: "http://garage.garage.svc.cluster.local:3900", Region: "garage", SecretRef: "garage-evacuation-credentials"},
 		},
@@ -140,7 +140,7 @@ func TestReconcile_HoldsForNodeDiskBudgetExceeded(t *testing.T) {
 			// other workspace on the node is considered.
 			Storage:    devplatformv1alpha1.WorkspaceStorage{Size: "1Gi", NodeDiskBudget: "500Mi"},
 			NodeName:   "test-node",
-			Database:   devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
+			Database:   &devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 			Auth:       devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
 			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", Endpoint: "http://garage.garage.svc.cluster.local:3900", Region: "garage", SecretRef: "garage-evacuation-credentials"},
 		},

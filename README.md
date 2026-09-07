@@ -38,7 +38,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | 証明書発行の仕組み (cert-manager 等) | `gateway.tls.secretName` の TLS 証明書 | 必須 |
 | OIDC 対応の認可サーバ | ゲートウェイの認証 (`gateway.oidc.*`) | 必須 |
 | Infisical Kubernetes Operator | 秘匿情報の同期 (`infisical.*`) | 任意。既定 (`infisical.enabled: false`) では不要で、利用者が自分で用意した Secret を直接参照する |
-| ブランチ専用データベース (PostgreSQL 系。CloudNativePG 等) | ワークスペースごとの作業用 DB | 必須 (この chart には含まれない。利用者側で用意し `workspaceTemplate.database.clusterRef` で参照する) |
+| ブランチ専用データベース (PostgreSQL 系。CloudNativePG 等) | ワークスペースごとの作業用 DB | 任意 (既定 `workspaceTemplate.database.enabled: true`)。使う場合はこの chart には含まれず、利用者側で用意し `workspaceTemplate.database.clusterRef` で参照する。`enabled: false` にするとワークスペースはデータベースなしで払い出される |
 | S3 互換オブジェクトストレージ (Garage 等) | 作業内容の退避先 | 必須。既定 (`evacuationCredentials.autoProvision.enabled: true`) はクラスタ内 Garage 前提で資格情報を自動発行する。外部 S3 を使う場合は無効化して自分で用意する |
 | Tailscale operator 等の VPN | 統合開発環境からの任意経路 | 任意。`subnetRouterNamespace` を設定した場合のみ経路が開く |
 
@@ -69,8 +69,11 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
   先に終わっていないとゲートウェイの受け口自体が張られない。
 - `gateway.oidc.issuer`/`audience`/`jwksUrl` は認可サーバ側のクライアント登録と
   一致していないと、正当なトークンでも一律に拒否される。
-- `workspaceTemplate.database.clusterRef` は Workspace 払い出し時にだけ参照される。
-  この chart 自体はデータベースを配備しないため、先に用意しておく。
+- `workspaceTemplate.database.clusterRef` (`enabled: true` の間のみ必須) は Workspace
+  払い出し時にだけ参照される。この chart 自体はデータベースを配備しないため、先に
+  用意しておく。データベースを使わない場合は `workspaceTemplate.database.enabled: false`
+  にする — `database.namespace` (NetworkPolicy の egress 許可先) とは別の値なので、
+  完全に無効化したいなら両方空/false にする。
 - `evacuationCredentials.autoProvision.enabled: true` (既定) のまま外部 S3 を使うと、
   存在しない Garage Pod への到達を試みて Job が失敗し続ける。外部 S3 を使う場合は
   必ず無効化する。
@@ -102,14 +105,15 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `routing.ingressNamespace`/`ingressPodSelector` | ルーティング実装がワークスペースへ到達するための NetworkPolicy 許可元 | `kube-system` / `app.kubernetes.io/name: traefik` (Traefik 同梱の k3s を既定と仮定) | 省略可。空にするとこの経路を許可しない |
 | `workspaceNamespace` | Workspace/WorkspaceTemplate を置くネームスペース | `devplatform-workspaces` | **必須** |
 | `subnetRouterNamespace` | VPN 等、任意経路の subnet router が居るネームスペース | `""` (経路を開かない) | 省略可 |
-| `database.namespace` | ブランチ専用データベースの egress 許可先ネームスペース | `devplatform-db` | 省略可。空にすると egress 規則を生成しない |
+| `database.namespace` | ブランチ専用データベースの egress 許可先ネームスペース (NetworkPolicy 用)。`workspaceTemplate.database.enabled` (機能自体の有効/無効) とは別の値 | `devplatform-db` | 省略可。空にすると egress 規則を生成しない |
 | `objectStorage.namespace` | 退避先オブジェクトストレージの egress 許可先ネームスペース | `garage` | 省略可。空にすると egress 規則を生成しない |
 | `network.excludeCIDRs` | 外部への egress 許可から除くクラスタ内アドレス範囲 (Pod/Service CIDR 等) | `[]` (除外しない) | 省略可 |
 | `workspaceTemplate.resources`/`storage` | 既定 WorkspaceTemplate の CPU/メモリ/作業ディレクトリ容量 | チャート既定値 | 省略可 |
 | `workspaceTemplate.nodeName` | ワークスペースの配置先ノード | `""` (制約なし) | 省略可。ノード固定の StorageClass を使うなら実質必須 |
 | `workspaceTemplate.priorityClassName` | ワークスペース Pod の PriorityClass | `devplatform-workspace` (この chart が生成) | 省略可 |
 | `workspaceTemplate.model` | 既定モデル | `""` (Claude Code 既定) | 省略可 |
-| `workspaceTemplate.database.clusterRef` | ブランチ専用データベースへの参照名 | なし | **必須** |
+| `workspaceTemplate.database.enabled` | ブランチ専用データベースを使うか (3.4/3.5)。false ではコントローラが CNPG 資源を一切生成せず、配備される WorkspaceTemplate も `spec.database` を含めない — ワークスペースはデータベースなしで払い出される | `true` | 省略可 |
+| `workspaceTemplate.database.clusterRef` | ブランチ専用データベースへの参照名 | なし | `enabled: true` の場合のみ必須 |
 | `workspaceTemplate.auth.secretRef` | Claude Code 長期認証情報を保持する Secret 名 | なし | **必須** |
 | `workspaceTemplate.evacuation.bucket`/`secretRef` | 退避先バケット名・S3 資格情報 Secret 名 | なし | **必須** |
 | `workspaceTemplate.evacuation.endpoint`/`region` | 退避先の S3 互換エンドポイント・リージョン。特定の実装に固定しない | この chart が同梱する Garage のクラスタ内エンドポイント | **必須**。別の S3 互換実装を使う場合はここを差し替える |

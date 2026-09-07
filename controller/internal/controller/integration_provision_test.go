@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/database"
 )
 
 // provisionIntSubstrate is the full inventory of incidental resources a
@@ -50,8 +51,8 @@ func provisionIntObserve(t *testing.T, ctx context.Context, ns, resourceName str
 	return provisionIntSubstrate{
 		pvc:           provisionIntLive(t, ctx, ns, resourceName, &corev1.PersistentVolumeClaim{}),
 		statefulSet:   provisionIntLive(t, ctx, ns, resourceName, &appsv1.StatefulSet{}),
-		database:      provisionIntLive(t, ctx, ns, resourceName, databaseRef(ns, resourceName)),
-		databaseRole:  provisionIntLive(t, ctx, ns, resourceName, databaseRoleRef(ns, resourceName)),
+		database:      provisionIntLive(t, ctx, ns, resourceName, database.CNPGDatabaseRef(ns, resourceName)),
+		databaseRole:  provisionIntLive(t, ctx, ns, resourceName, database.CNPGDatabaseRoleRef(ns, resourceName)),
 		claudeMD:      provisionIntLive(t, ctx, ns, ClaudeMDConfigMapName(resourceName), &corev1.ConfigMap{}),
 		gitCredential: provisionIntLive(t, ctx, ns, resourceName, &corev1.Secret{}),
 		previewRoute:  provisionIntLive(t, ctx, ns, resourceName+hostSuffixPreview, ingressRouteRef(ns, resourceName+hostSuffixPreview)),

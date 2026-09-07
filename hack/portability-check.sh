@@ -60,6 +60,7 @@ optional_deps_disabled() {
     --set infisical.sshCa.enabled=false \
     --set infisical.evacuation.enabled=false \
     --set controller.persistence.enabled=false \
+    --set workspaceTemplate.database.enabled=false \
     >/dev/null 2>&1
 }
 check "render succeeds with all optional dependencies disabled" optional_deps_disabled

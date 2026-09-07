@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/database"
 	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/routing"
 )
 
@@ -49,6 +50,15 @@ func newTestReconciler() *WorkspaceReconciler {
 			TLSSecretName: testRoutingTLSSecretName,
 		},
 		Domain: testRoutingDomain,
+		// Tests unrelated to database adapter selection don't want to know
+		// about it, so they get a working default (CNPG, matching what this
+		// deployment ran before task 3.4); database_reconciler_test.go and
+		// database_disabled_test.go override DatabaseAdapter where the
+		// selection itself is under test.
+		DatabaseAdapter: &database.CNPGAdapter{
+			Client: testClient,
+			Scheme: scheme.Scheme,
+		},
 	}
 }
 
@@ -64,7 +74,7 @@ func createTemplate(t *testing.T, ctx context.Context, ns, name string) {
 			},
 			Storage:  devplatformv1alpha1.WorkspaceStorage{Size: "1Gi"},
 			NodeName: "test-node",
-			Database: devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
+			Database: &devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 			Auth:     devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
 			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{
 				Bucket:    "workspace",

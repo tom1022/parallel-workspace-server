@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/database"
 )
 
 // backdateLastActivity rewrites ws's lastActivityAt directly via the status
@@ -292,11 +293,11 @@ func TestReconcile_TerminatingDeletesSubstrateAndSetsPhase(t *testing.T) {
 		t.Fatalf("expected StatefulSet deleted after destroy request: %v", err)
 	}
 
-	errDB := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, databaseRef(ns, resourceName))
+	errDB := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, database.CNPGDatabaseRef(ns, resourceName))
 	if !apierrors.IsNotFound(errDB) {
 		t.Errorf("expected Database deleted after destroy request, err=%v", errDB)
 	}
-	errRole := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, databaseRoleRef(ns, resourceName))
+	errRole := testClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: ns}, database.CNPGDatabaseRoleRef(ns, resourceName))
 	if !apierrors.IsNotFound(errRole) {
 		t.Errorf("expected DatabaseRole deleted after destroy request, err=%v", errRole)
 	}
@@ -344,7 +345,7 @@ func createTemplateOnNode(t *testing.T, ctx context.Context, ns, name, nodeName 
 			},
 			Storage:    devplatformv1alpha1.WorkspaceStorage{Size: "1Gi"},
 			NodeName:   nodeName,
-			Database:   devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
+			Database:   &devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 			Auth:       devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
 			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", Endpoint: "http://garage.garage.svc.cluster.local:3900", Region: "garage", SecretRef: "garage-evacuation-credentials"},
 		},

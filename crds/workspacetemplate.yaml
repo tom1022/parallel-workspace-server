@@ -40,7 +40,6 @@ spec:
               required:
                 - image
                 - resources
-                - database
                 - auth
                 - evacuation
               properties:
@@ -110,6 +109,11 @@ spec:
                     Claude Code 自身の既定モデルをそのまま用いる。
                 database:
                   type: object
+                  description: |
+                    ブランチ専用データベースへの参照。省略した場合、このテンプレートから
+                    払い出すワークスペースはデータベースなしで構成される (Requirement 3.5) —
+                    接続用の環境変数・クライアント証明書マウント・スキーマ初期化 init
+                    container のいずれも生成しない。
                   required:
                     - clusterRef
                   properties:

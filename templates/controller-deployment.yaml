@@ -62,6 +62,17 @@ spec:
               value: {{ join "," (.Values.routing.exposure.middlewareRefs | default (list)) | quote }}
             - name: ROUTING_EXPOSURE_ANNOTATIONS
               value: {{ .Values.routing.exposure.annotations | default dict | toJson | quote }}
+            # ブランチ専用データベースを生成する DatabaseAdapter 実装 (3.4/3.5)。
+            # workspaceTemplate.database.enabled: false では CNPG 資源を一切生成しない
+            # no-op 実装を選ぶ — この chart が配備する WorkspaceTemplate 自体も
+            # spec.database を含めない (workspacetemplate.yaml) ため、両者は一致する。
+            {{- if .Values.workspaceTemplate.database.enabled }}
+            - name: DATABASE_TYPE
+              value: "cnpg"
+            {{- else }}
+            - name: DATABASE_TYPE
+              value: "none"
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

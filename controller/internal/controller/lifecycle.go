@@ -371,10 +371,10 @@ func (r *WorkspaceReconciler) reconcileTerminating(ctx context.Context, ws *devp
 	})); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := client.IgnoreNotFound(r.Delete(ctx, databaseRef(ws.Namespace, resourceName))); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := client.IgnoreNotFound(r.Delete(ctx, databaseRoleRef(ws.Namespace, resourceName))); err != nil {
+	// Deleted through DatabaseAdapter.Release (task 3.4) rather than a direct
+	// r.Delete, so this reconciler stays unaware of which resource kind (if
+	// any) backs the branch database.
+	if err := r.DatabaseAdapter.Release(ctx, r.databaseTarget(ws, resourceName, "")); err != nil {
 		return ctrl.Result{}, err
 	}
 

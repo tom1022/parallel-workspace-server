@@ -108,7 +108,13 @@ type WorkspaceTemplateSpec struct {
 	// +optional
 	Model string `json:"model,omitempty"`
 
-	Database WorkspaceDatabaseRef `json:"database"`
+	// Database references the branch-dedicated database cluster. nil means
+	// this template provisions workspaces without a branch database at all
+	// (Requirement 3.5): resources.go omits the connection env/volume/
+	// bootstrap init container and the Workspace Controller never calls its
+	// DatabaseAdapter for it.
+	// +optional
+	Database *WorkspaceDatabaseRef `json:"database,omitempty"`
 
 	Auth WorkspaceAuthRef `json:"auth"`
 

@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/database"
 	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/routing"
 	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/controller"
 )
@@ -55,6 +56,7 @@ func main() {
 	}
 
 	routingAdapter, routingDomain, routingExposure := buildRoutingAdapter(log, mgr.GetClient(), mgr.GetScheme())
+	databaseAdapter := buildDatabaseAdapter(log, mgr.GetClient(), mgr.GetScheme())
 
 	if err := (&controller.WorkspaceReconciler{
 		Client: mgr.GetClient(),
@@ -83,6 +85,9 @@ func main() {
 		RoutingAdapter:  routingAdapter,
 		Domain:          routingDomain,
 		RoutingExposure: routingExposure,
+		// DatabaseAdapter provisions the branch-dedicated database (task
+		// 3.4); see buildDatabaseAdapter.
+		DatabaseAdapter: databaseAdapter,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create Workspace controller")
 		os.Exit(1)
@@ -167,6 +172,27 @@ func buildRoutingAdapter(log logr.Logger, c client.Client, scheme *runtime.Schem
 	}
 
 	return adapter, domain, exposure
+}
+
+// buildDatabaseAdapter selects the DatabaseAdapter this deployment runs
+// (task 3.4, Requirement 3.5): DATABASE_TYPE picks the implementation,
+// mirroring buildRoutingAdapter's ROUTING_TYPE. "none" is how an operator
+// without a CNPG-compatible cluster (or who simply does not want a branch
+// database) disables the feature; the resulting NoopAdapter is safe as long
+// as workspaceTemplate.database.enabled=false also keeps every
+// WorkspaceTemplate this chart renders from configuring one (helm chart
+// side, values.yaml/templates/workspacetemplate.yaml).
+func buildDatabaseAdapter(log logr.Logger, c client.Client, scheme *runtime.Scheme) database.DatabaseAdapter {
+	switch databaseType := os.Getenv("DATABASE_TYPE"); databaseType {
+	case "", "cnpg":
+		return &database.CNPGAdapter{Client: c, Scheme: scheme}
+	case "none":
+		return &database.NoopAdapter{}
+	default:
+		log.Error(nil, `DATABASE_TYPE must be "cnpg" or "none"`, "value", databaseType)
+		os.Exit(1)
+		return nil
+	}
 }
 
 // splitList reads a comma-separated env var, dropping blanks so an unset or

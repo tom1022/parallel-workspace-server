@@ -340,7 +340,7 @@ func TestBuildStatefulSet_PassesTheBranchDatabaseToTheWorkspace(t *testing.T) {
 			Image:     "busybox",
 			Resources: devplatformv1alpha1.WorkspaceResources{Requests: devplatformv1alpha1.ResourceList{CPU: "1", Memory: "1Gi"}, Limits: devplatformv1alpha1.ResourceList{CPU: "2", Memory: "2Gi"}},
 			Auth:      devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
-			Database:  devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
+			Database:  &devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
 		},
 	}
 
@@ -405,7 +405,7 @@ func TestBuildStatefulSet_PassesTheBranchDatabaseToTheWorkspace(t *testing.T) {
 func TestBuildStatefulSet_BootstrapsTheDatabaseAfterTheCheckout(t *testing.T) {
 	ws, tmpl := supervisorTestWorkspace()
 	ws.Namespace = "devplatform-workspaces"
-	tmpl.Spec.Database = devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"}
+	tmpl.Spec.Database = &devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"}
 
 	sts, err := buildStatefulSet(ws, tmpl, "feature-supervisor")
 	if err != nil {
@@ -436,6 +436,44 @@ func TestBuildStatefulSet_BootstrapsTheDatabaseAfterTheCheckout(t *testing.T) {
 	}
 	if env["PGDATABASE"] == "" {
 		t.Error("bootstrap PGDATABASE is unset")
+	}
+}
+
+// TestBuildStatefulSet_NoDatabaseOmitsDatabaseResources covers Requirement
+// 3.5: a WorkspaceTemplate with no database configured (Spec.Database == nil)
+// must not carry any trace of one on the generated Pod — the branch has no
+// role, so waiting on a client-cert Secret that will never exist would hang
+// the Pod forever.
+func TestBuildStatefulSet_NoDatabaseOmitsDatabaseResources(t *testing.T) {
+	ws, tmpl := supervisorTestWorkspace()
+	if tmpl.Spec.Database != nil {
+		t.Fatal("test fixture must start with no database configured")
+	}
+
+	sts, err := buildStatefulSet(ws, tmpl, ws.Name)
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+
+	inits := sts.Spec.Template.Spec.InitContainers
+	if len(inits) != 1 {
+		t.Fatalf("init containers = %d, want only the checkout (no db-bootstrap)", len(inits))
+	}
+
+	for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "PGHOST" || e.Name == "DATABASE_URL" {
+			t.Errorf("env %s = %q, want no database env without a configured database", e.Name, e.Value)
+		}
+	}
+	for _, v := range sts.Spec.Template.Spec.Volumes {
+		if v.Name == databaseCertVolumeName {
+			t.Errorf("volumes = %+v, want no client certificate volume without a configured database", sts.Spec.Template.Spec.Volumes)
+		}
+	}
+	for _, m := range sts.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.Name == databaseCertVolumeName {
+			t.Errorf("volumeMounts = %+v, want no client certificate mount without a configured database", sts.Spec.Template.Spec.Containers[0].VolumeMounts)
+		}
 	}
 }
 

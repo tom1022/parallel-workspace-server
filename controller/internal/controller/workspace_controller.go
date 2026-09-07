@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
+	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/database"
 	"github.com/tom1022/gitops-apps/apps/devplatform/controller/internal/adapter/routing"
 )
 
@@ -117,6 +118,14 @@ type WorkspaceReconciler struct {
 	// points (Requirement 3.1/3.2's exposure hook). Zero value attaches
 	// nothing extra.
 	RoutingExposure routing.RoutingExposure
+
+	// DatabaseAdapter provisions the workspace's branch-dedicated database
+	// (task 3.4); the reconciler asks for "the branch database" without
+	// knowing which resource kind (if any) backs it. Only consulted for a
+	// WorkspaceTemplate that configures one (Spec.Database != nil,
+	// Requirement 3.5) — a nil adapter is therefore safe as long as every
+	// template reconciled with it also omits Database.
+	DatabaseAdapter database.DatabaseAdapter
 }
 
 func (r *WorkspaceReconciler) notify(ctx context.Context, ws *devplatformv1alpha1.Workspace, kind, detail string) {
@@ -427,11 +436,13 @@ func (r *WorkspaceReconciler) failAndRollback(ctx context.Context, ws *devplatfo
 		// Database/DatabaseRole are only ever OwnerReference-GC'd on actual
 		// object deletion (8.9/8.10); a rollback to Failed leaves ws alive, so
 		// any partially-created substrate needs the same explicit cleanup the
-		// StatefulSet/PVC above get.
-		if err := client.IgnoreNotFound(r.Delete(ctx, databaseRef(ws.Namespace, resourceName))); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := client.IgnoreNotFound(r.Delete(ctx, databaseRoleRef(ws.Namespace, resourceName))); err != nil {
+		// StatefulSet/PVC above get. Deleted through DatabaseAdapter.Release
+		// rather than a direct r.Delete, for the same reason routing uses
+		// RoutingAdapter.Remove below (task 3.4): which resource kind (if
+		// any) was generated is exactly what this reconciler must not know.
+		// ClusterRef is irrelevant to a delete-by-name, so it is left empty
+		// even for a template that opted out of a database entirely.
+		if err := r.DatabaseAdapter.Release(ctx, r.databaseTarget(ws, resourceName, "")); err != nil {
 			return ctrl.Result{}, err
 		}
 		// Same reasoning for the routing, the shared document and the issued
