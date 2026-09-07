@@ -76,6 +76,18 @@ func (s *Supervisor) Handler() http.Handler {
 		writeJSONResponse(w, http.StatusOK, map[string]int{"count": count})
 	})
 
+	mux.HandleFunc("GET /changed-files", func(w http.ResponseWriter, r *http.Request) {
+		files, err := ChangedFiles(s.WorkingDir)
+		if err != nil {
+			writeJSONResponse(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if files == nil {
+			files = []string{}
+		}
+		writeJSONResponse(w, http.StatusOK, map[string][]string{"files": files})
+	})
+
 	mux.HandleFunc("GET /turn", func(w http.ResponseWriter, r *http.Request) {
 		state, err := s.TurnState()
 		if err != nil {

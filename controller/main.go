@@ -65,7 +65,11 @@ func main() {
 		// instead of the workspace reporting it: the dependency has to run
 		// Control Plane -> Workspace Runtime (4.8).
 		SSHSessionCounter: &controller.SupervisorSSHSessionCounter{Client: mgr.GetClient()},
-		Notify:            controller.HermesNotifier(os.Getenv("HERMES_NOTIFY_URL")),
+		// The Blackboard's changed-file list is pulled from the workspace for
+		// the same reason: only the workspace holds the working directory,
+		// and the controller stays the single writer of its status (10.3).
+		ChangedFilesReporter: &controller.SupervisorChangedFilesReporter{Client: mgr.GetClient()},
+		Notify:               controller.HermesNotifier(os.Getenv("HERMES_NOTIFY_URL")),
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create Workspace controller")
 		os.Exit(1)

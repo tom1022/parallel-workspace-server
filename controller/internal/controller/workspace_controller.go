@@ -87,6 +87,12 @@ type WorkspaceReconciler struct {
 	// consulted, which only ever makes a workspace easier to suspend.
 	SSHSessionCounter SSHSessionCounter
 
+	// ChangedFilesReporter reads the paths the workspace is currently
+	// changing, for that branch's Blackboard entry (10.3). Unset leaves the
+	// recorded list untouched, which costs freshness but never invents an
+	// empty list for a branch that is in fact editing files.
+	ChangedFilesReporter ChangedFilesReporter
+
 	// Notify reports a condition a human has to act on. Unset is a no-op:
 	// chat relay is the platform's only notification path and losing it must
 	// not take reconciliation down with it.
@@ -415,6 +421,10 @@ func (r *WorkspaceReconciler) failAndRollback(ctx context.Context, ws *devplatfo
 }
 
 func (r *WorkspaceReconciler) markReady(ctx context.Context, ws *devplatformv1alpha1.Workspace, resourceName string, urls devplatformv1alpha1.WorkspaceURLs) error {
+	// 10.2: the branch's entry is registered as part of the same status write
+	// that publishes the workspace as Ready, so it exists from the moment
+	// anything can look the workspace up.
+	r.syncBlackboard(ctx, ws)
 	ws.Status.Phase = devplatformv1alpha1.WorkspacePhaseReady
 	ws.Status.WorkspaceId = resourceName
 	ws.Status.Urls = urls

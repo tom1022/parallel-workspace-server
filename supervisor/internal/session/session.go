@@ -52,6 +52,8 @@ type Supervisor struct {
 	Tmux      *Tmux
 	ConfigDir string
 	OutputLog string
+	// WorkingDir is the branch's checkout, which /changed-files reports on.
+	WorkingDir string
 	// SSHPort is the port SSHEndpoint listens on; zero means DefaultSSHPort.
 	SSHPort int
 

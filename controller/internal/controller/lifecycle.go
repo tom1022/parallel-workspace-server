@@ -88,6 +88,14 @@ func (r *WorkspaceReconciler) reconcileReady(ctx context.Context, ws *devplatfor
 		return ctrl.Result{}, err
 	}
 
+	// 10.3: what the agent is changing only shows up by being read, so the
+	// entry is refreshed on every Ready pass rather than at a lifecycle edge.
+	if r.syncBlackboard(ctx, ws) {
+		if err := r.Status().Update(ctx, ws); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	idle := ws.Status.LastActivityAt != nil && r.now().Sub(ws.Status.LastActivityAt.Time) >= defaultIdleSuspendTimeout
 	requested := ws.Spec.DesiredPhase == devplatformv1alpha1.DesiredPhaseSuspended
 	// A developer holding the workspace — browser or SSH — keeps the clock at
@@ -305,6 +313,15 @@ func (r *WorkspaceReconciler) scaleStatefulSet(ctx context.Context, namespace, n
 // left to Kubernetes' own garbage collector (11.7) instead of being deleted
 // here.
 func (r *WorkspaceReconciler) reconcileTerminating(ctx context.Context, ws *devplatformv1alpha1.Workspace) (ctrl.Result, error) {
+	// 10.8, before the duplicate-workspace shortcut below: a destroyed branch
+	// stops being one the others have to work around whether or not it owned
+	// substrate of its own.
+	if r.deactivateBlackboard(ws) {
+		if err := r.Status().Update(ctx, ws); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	resourceName := ws.Status.WorkspaceId
 
 	// A workspace that only ever mirrored another canonical workspace's
