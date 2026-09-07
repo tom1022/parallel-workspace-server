@@ -6,7 +6,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"sort"
 	"sync"
+	"time"
 )
 
 // SendError kinds, mirroring the SessionControl contract in design.md.
@@ -63,6 +65,41 @@ type Supervisor struct {
 
 	mu      sync.RWMutex
 	failure string
+	// held names the clients that drive the session from outside the
+	// multiplexer. The Terminal Gateway relays a browser's keystrokes over
+	// HTTP instead of attaching, so tmux reports no client for it and the
+	// single-writer check would otherwise be blind to a developer who has
+	// taken the session over through the browser (3.2 / 3.5).
+	held map[string]time.Time
+}
+
+// HoldWritable records that clientID now drives the session read-write.
+func (s *Supervisor) HoldWritable(clientID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.held == nil {
+		s.held = map[string]time.Time{}
+	}
+	s.held[clientID] = time.Now().UTC()
+}
+
+// ReleaseWritable gives the session back, which is what lets Hermes Agent
+// resume (3.6).
+func (s *Supervisor) ReleaseWritable(clientID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.held, clientID)
+}
+
+func (s *Supervisor) heldClients() []SessionClient {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]SessionClient, 0, len(s.held))
+	for id, at := range s.held {
+		out = append(out, SessionClient{ID: id, Writable: true, AttachedAt: at.Format(time.RFC3339)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // SetFailure records that the hosted process died. The transcript cannot show
@@ -84,18 +121,25 @@ func (s *Supervisor) ClearFailure() {
 }
 
 // SendInput delivers text to the session on behalf of a process that is not
-// attached (2.7). It refuses while a writable developer client holds the
-// session, which is the enforcement point behind 3.5: Hermes Agent's own
-// check is advisory, this one is mechanical.
+// attached (2.7).
 func (s *Supervisor) SendInput(text string) error {
+	return s.SendInputFrom("", text)
+}
+
+// SendInputFrom delivers text attributed to clientID. It refuses while some
+// other writable developer client holds the session, which is the enforcement
+// point behind 3.5: Hermes Agent's own check is advisory, this one is
+// mechanical. Naming the sender is what keeps the developer who took the
+// session over able to type through the same endpoint.
+func (s *Supervisor) SendInputFrom(clientID, text string) error {
 	if !s.Tmux.HasSession() {
 		return &SendError{Kind: SendSessionNotRunning}
 	}
-	clients, err := s.Tmux.ListClients()
+	clients, err := s.ListClients()
 	if err != nil {
 		return &SendError{Kind: SendInputRejected, Detail: err.Error()}
 	}
-	if c := firstWritable(clients); c != nil {
+	if c := firstWritableOther(clients, clientID); c != nil {
 		return &SendError{Kind: SendWritableClientPresent, ClientID: c.ID}
 	}
 	// The turn starts with the text below, so this is the point that fixes
@@ -146,6 +190,7 @@ func (s *Supervisor) ListClients() ([]SessionClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	clients = append(clients, s.heldClients()...)
 	if clients == nil {
 		return []SessionClient{}, nil
 	}

@@ -31,13 +31,14 @@ func (s *Supervisor) Handler() http.Handler {
 
 	mux.HandleFunc("POST /input", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Text string `json:"text"`
+			Text     string `json:"text"`
+			ClientID string `json:"clientId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSONResponse(w, http.StatusBadRequest, &SendError{Kind: SendInputRejected, Detail: err.Error()})
 			return
 		}
-		err := s.SendInput(body.Text)
+		err := s.SendInputFrom(body.ClientID, body.Text)
 		if err == nil {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -61,6 +62,20 @@ func (s *Supervisor) Handler() http.Handler {
 			return
 		}
 		writeJSONResponse(w, http.StatusOK, clients)
+	})
+
+	// The Terminal Gateway declares a browser takeover here, and drops it on
+	// disconnect. Nothing durable is kept: a hold cannot outlive the gateway
+	// process serving the socket behind it, and a supervisor restart means the
+	// session it guarded is gone too.
+	mux.HandleFunc("POST /clients/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.HoldWritable(r.PathValue("id"))
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("DELETE /clients/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.ReleaseWritable(r.PathValue("id"))
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("GET /browser-verification", func(w http.ResponseWriter, r *http.Request) {

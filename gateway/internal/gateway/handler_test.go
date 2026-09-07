@@ -3,9 +3,11 @@ package gateway
 import (
 	"encoding/json"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,12 +19,32 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// stubSupervisor stands in for a workspace's Session Supervisor.
+// stubSupervisor stands in for a workspace's Session Supervisor, including the
+// single-writer rule it enforces mechanically: input is refused while some
+// other client holds the session read-write.
 type stubSupervisor struct {
 	mu             sync.Mutex
 	output         string
 	input          []string
 	writableClient bool
+	// holders are the takeovers declared by the gateway for clients that reach
+	// the session over HTTP instead of attaching to the multiplexer.
+	holders map[string]bool
+}
+
+const stubAttachedClientID = "/dev/pts/3"
+
+// blockingClientLocked names a writable client other than clientID, if any.
+func (s *stubSupervisor) blockingClientLocked(clientID string) string {
+	if s.writableClient && clientID != stubAttachedClientID {
+		return stubAttachedClientID
+	}
+	for _, id := range slices.Sorted(maps.Keys(s.holders)) {
+		if id != clientID {
+			return id
+		}
+	}
+	return ""
 }
 
 func (s *stubSupervisor) handler() http.Handler {
@@ -42,24 +64,48 @@ func (s *stubSupervisor) handler() http.Handler {
 	})
 	mux.HandleFunc("POST /input", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Text string `json:"text"`
+			Text     string `json:"text"`
+			ClientID string `json:"clientId"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		s.mu.Lock()
+		defer s.mu.Unlock()
+		if blocker := s.blockingClientLocked(body.ClientID); blocker != "" {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"kind":     "WritableClientPresent",
+				"clientId": blocker,
+			})
+			return
+		}
 		s.input = append(s.input, body.Text)
-		s.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /clients", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if !s.writableClient {
-			writeJSON(w, http.StatusOK, []any{})
-			return
+		clients := []map[string]any{}
+		if s.writableClient {
+			clients = append(clients, map[string]any{"id": stubAttachedClientID, "writable": true, "attachedAt": "2026-09-06T00:00:00Z"})
 		}
-		writeJSON(w, http.StatusOK, []map[string]any{
-			{"id": "/dev/pts/3", "writable": true, "attachedAt": "2026-09-06T00:00:00Z"},
-		})
+		for _, id := range slices.Sorted(maps.Keys(s.holders)) {
+			clients = append(clients, map[string]any{"id": id, "writable": true, "attachedAt": "2026-09-06T00:00:00Z"})
+		}
+		writeJSON(w, http.StatusOK, clients)
+	})
+	mux.HandleFunc("POST /clients/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		if s.holders == nil {
+			s.holders = map[string]bool{}
+		}
+		s.holders[r.PathValue("id")] = true
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("DELETE /clients/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		delete(s.holders, r.PathValue("id"))
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /turn", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"state": "AwaitingInput"})
@@ -97,6 +143,9 @@ type testRig struct {
 	token      string
 	supervisor *stubSupervisor
 	store      *Store
+	// backendURL is where the stub Session Supervisor listens, so a test can
+	// reach it the way Hermes Agent does: directly, not through the gateway.
+	backendURL string
 }
 
 func newTestRig(t *testing.T, objs ...runtime.Object) *testRig {
@@ -121,6 +170,7 @@ func newTestRig(t *testing.T, objs ...runtime.Object) *testRig {
 		token:      signToken(t, key, validClaims()),
 		supervisor: supervisor,
 		store:      store,
+		backendURL: backend.URL,
 	}
 }
 

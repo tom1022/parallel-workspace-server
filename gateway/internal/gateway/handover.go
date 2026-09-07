@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -68,6 +70,14 @@ func (b *browserSessions) promote(workspace, id string) (ok, known bool) {
 	return true, true
 }
 
+func (b *browserSessions) release(workspace, id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, exists := b.byWorkspace[workspace][id]; exists {
+		b.byWorkspace[workspace][id] = false
+	}
+}
+
 func (b *browserSessions) writable(workspace, id string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -114,7 +124,46 @@ func (h *Handler) handover(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "another client already holds this session read-write"})
 		return
 	}
+	// A browser reaching the session through this gateway never attaches to the
+	// multiplexer, so the supervisor's client list cannot see it. Declaring the
+	// takeover there is what makes Hermes Agent's check (3.7) find a writable
+	// client and stop sending (3.5). A promotion the supervisor did not record
+	// is worse than no promotion at all — it would leave the developer typing
+	// into a session the agent is still driving — so it is undone here.
+	if err := h.declareWritable(r.Context(), http.MethodPost, endpoint, req.SessionId); err != nil {
+		h.sessions.release(ws.Name, req.SessionId)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"writable": true})
+}
+
+func (h *Handler) declareWritable(ctx context.Context, method, endpoint, sessionID string) error {
+	req, err := http.NewRequestWithContext(ctx, method, endpoint+"/clients/"+url.PathEscape(sessionID), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := h.client().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("gateway: session clients: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// releaseWritable hands the session back when the browser holding it goes away,
+// which is what lets Hermes Agent resume (3.6). Like the connection report it
+// runs on its own context: the request that carried the socket is already over.
+func (h *Handler) releaseWritable(endpoint, sessionID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), connectionReportTimeout)
+	defer cancel()
+	if err := h.declareWritable(ctx, http.MethodDelete, endpoint, sessionID); err != nil {
+		log.Printf("gateway: releasing write access for %s: %v", sessionID, err)
+	}
 }
 
 func (h *Handler) refuseIfWritableClientPresent(ctx context.Context, endpoint string) error {

@@ -108,6 +108,9 @@ func (h *Handler) serveSessionSocket(w http.ResponseWriter, r *http.Request) {
 	websocket.Handler(func(conn *websocket.Conn) {
 		h.reportConnections(ws.Name, h.sessions.attach(ws.Name, sessionID))
 		defer func() {
+			if h.sessions.writable(ws.Name, sessionID) {
+				h.releaseWritable(endpoint, sessionID)
+			}
 			h.reportConnections(ws.Name, h.sessions.detach(ws.Name, sessionID))
 		}()
 		// Terminal output is arbitrary bytes; framing it as text would let a
@@ -137,7 +140,7 @@ func (h *Handler) bridge(conn *websocket.Conn, endpoint, workspace, sessionID st
 			if n == 0 || !h.sessions.writable(workspace, sessionID) {
 				continue
 			}
-			if err := h.sendInput(ctx, endpoint, string(buf[:n])); err != nil {
+			if err := h.sendInput(ctx, endpoint, sessionID, string(buf[:n])); err != nil {
 				return
 			}
 		}
@@ -192,8 +195,11 @@ func (h *Handler) readOutput(ctx context.Context, endpoint string, since int64) 
 	return body.Chunks, nil
 }
 
-func (h *Handler) sendInput(ctx context.Context, endpoint, text string) error {
-	payload, err := json.Marshal(map[string]string{"text": text})
+func (h *Handler) sendInput(ctx context.Context, endpoint, sessionID, text string) error {
+	// Naming the sender is what distinguishes the developer who took the
+	// session over from a third party: the supervisor refuses input from
+	// anyone but the client holding it.
+	payload, err := json.Marshal(map[string]string{"text": text, "clientId": sessionID})
 	if err != nil {
 		return err
 	}

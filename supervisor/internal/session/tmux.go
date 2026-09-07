@@ -200,6 +200,17 @@ func parseClients(out string) ([]SessionClient, error) {
 	return clients, nil
 }
 
+// firstWritableOther finds a writable client that is not exclude, so a client
+// asking to type is not blocked by its own hold on the session.
+func firstWritableOther(clients []SessionClient, exclude string) *SessionClient {
+	for i := range clients {
+		if clients[i].Writable && clients[i].ID != exclude {
+			return &clients[i]
+		}
+	}
+	return nil
+}
+
 func firstWritable(clients []SessionClient) *SessionClient {
 	for i := range clients {
 		if clients[i].Writable {
