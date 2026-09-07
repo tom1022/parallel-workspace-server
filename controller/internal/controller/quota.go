@@ -26,6 +26,12 @@ const (
 	EventAuthError      = "AuthError"
 )
 
+// AnnotationActiveModel carries the model a workspace was switched to after
+// its model-scoped window ran out (7.7). It overrides the template's model.
+// An annotation, not a status field, so the governor can record it without
+// contending with the Workspace reconciler over status ownership.
+const AnnotationActiveModel = "devplatform.fickledev.com/active-model"
+
 // usageReadTimeout bounds one reconcile's read, matching the other synchronous
 // calls the control plane makes into a workspace.
 const usageReadTimeout = 5 * time.Second

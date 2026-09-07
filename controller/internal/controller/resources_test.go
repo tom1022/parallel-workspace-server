@@ -176,6 +176,26 @@ func TestBuildStatefulSet_DefaultModelComesFromTheTemplate(t *testing.T) {
 	}
 }
 
+// 7.7: the model the governor switched to has to reach the session, or the
+// switch buys nothing.
+func TestBuildStatefulSet_ActiveModelOverridesTheTemplate(t *testing.T) {
+	ws, tmpl := supervisorTestWorkspace()
+	tmpl.Spec.Model = "claude-opus-5"
+	ws.Annotations = map[string]string{AnnotationActiveModel: "claude-sonnet-5"}
+
+	sts, err := buildStatefulSet(ws, tmpl, ws.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e.Value
+	}
+	if env["ANTHROPIC_MODEL"] != "claude-sonnet-5" {
+		t.Errorf("ANTHROPIC_MODEL = %q, want the model the governor switched to", env["ANTHROPIC_MODEL"])
+	}
+}
+
 func TestBuildStatefulSet_UnsetModelLeavesClaudeCodeDefault(t *testing.T) {
 	ws, tmpl := supervisorTestWorkspace()
 

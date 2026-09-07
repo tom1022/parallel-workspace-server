@@ -83,8 +83,24 @@ type TaskQueueReconciler struct {
 	// leave headroom for work already in flight.
 	MinRemainingPercent float64
 
+	// ModelFallbacks is the switching order used when a model-scoped window
+	// runs out (7.7), most preferred first. The end of the chain turns the
+	// model window into an ordinary stop.
+	ModelFallbacks []string
+
+	// Notify reports a stop a human has to act on. Unset is a no-op: chat
+	// relay is the platform's only notification path and losing it must not
+	// stop reconciliation.
+	Notify func(ctx context.Context, ws *devplatformv1alpha1.Workspace, kind, detail string)
+
 	// Now overrides time.Now; tests may fake it.
 	Now func() time.Time
+
+	// stopped is the condition dispatch is currently halted on, empty when
+	// running. It is in-process because it is derived: the next reading
+	// re-establishes it, and a control plane that restarts into a spent
+	// quota simply observes it again before dispatching anything.
+	stopped string
 
 	// recentQuotaHits is deliberately in-process: only the queue itself has to
 	// survive a restart (7.2), and rebuilding this history costs one quota
@@ -162,11 +178,15 @@ func (r *TaskQueueReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			continue
 		}
 
-		reading, ok := r.observe(ctx, task)
-		if ok {
-			if scope, spent := exhaustedScope(reading.Snapshots, r.MinRemainingPercent); spent {
-				r.recordQuotaHit(scope, r.now())
-				if err := r.holdAll(ctx, pending[i:], "QuotaExhausted", fmt.Sprintf("the %s quota window is spent", scope)); err != nil {
+		if reading, ok := r.observe(ctx, task); ok {
+			stop, err := r.throttle(ctx, task, reading)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if stop != "" {
+				// The credential and the account-wide windows are shared, so a
+				// condition that stops one task stops the whole queue behind it.
+				if err := r.holdAll(ctx, pending[i:], stop, r.stopped); err != nil {
 					return ctrl.Result{}, err
 				}
 				return ctrl.Result{RequeueAfter: quotaRecheckInterval}, nil
@@ -202,9 +222,112 @@ func (r *TaskQueueReconciler) observe(ctx context.Context, task *devplatformv1al
 	return reading, true
 }
 
-// holdAll parks the rest of the queue under one reason. The quota windows and
-// the credential are account-wide, so a condition that stops one task stops
-// every task behind it.
+// throttle applies one reading to the queue, returning the hold reason when
+// dispatch must stop and the empty string when the task may go ahead. It is
+// where 7.7 (switch model and continue), 7.8 (stop, notify, wait) and 7.9
+// (stop everything on a credential failure) diverge.
+func (r *TaskQueueReconciler) throttle(ctx context.Context, task *devplatformv1alpha1.TaskRequest, reading UsageReading) (string, error) {
+	if isAuthError(reading.ErrorKind) {
+		r.stop(ctx, task, EventAuthError, fmt.Sprintf("submission stopped for every workspace: %s", reading.ErrorKind))
+		return "AuthError", nil
+	}
+
+	scope, spent := exhaustedScope(reading.Snapshots, r.MinRemainingPercent)
+	if !spent {
+		r.resume()
+		return "", nil
+	}
+	r.recordQuotaHit(scope, r.now())
+
+	if scope == QuotaScopeModel {
+		next, err := r.switchModel(ctx, task)
+		if err != nil {
+			return "", err
+		}
+		if next != "" {
+			r.resume()
+			return "", nil
+		}
+		// Nothing left to switch to, so the model window is as binding as an
+		// account-wide one.
+	}
+
+	r.stop(ctx, task, EventQuotaExhausted, fmt.Sprintf("dispatch stopped: the %s quota window is spent", scope))
+	return "QuotaExhausted", nil
+}
+
+// switchModel moves the workspace to the next model in the chain and reports
+// it, or the empty string when the chain is spent. The model is recorded as an
+// annotation rather than status because the Workspace reconciler owns status;
+// that reconciler reads it back and rewrites the session's ANTHROPIC_MODEL.
+func (r *TaskQueueReconciler) switchModel(ctx context.Context, task *devplatformv1alpha1.TaskRequest) (string, error) {
+	var ws devplatformv1alpha1.Workspace
+	if err := r.Get(ctx, types.NamespacedName{Name: task.Spec.WorkspaceRef, Namespace: task.Namespace}, &ws); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+
+	next := nextModel(r.ModelFallbacks, ws.Annotations[AnnotationActiveModel])
+	if next == "" {
+		return "", nil
+	}
+	if ws.Annotations == nil {
+		ws.Annotations = map[string]string{}
+	}
+	ws.Annotations[AnnotationActiveModel] = next
+	if err := r.Update(ctx, &ws); err != nil {
+		return "", err
+	}
+	log.FromContext(ctx).Info("model quota spent, switching model", "workspace", ws.Name, "model", next)
+	return next, nil
+}
+
+// nextModel returns the entry after current in the chain. An unset current
+// means the workspace is still on the chain's head, so the switch goes to the
+// second entry; a current that is not in the chain has nowhere defined to go.
+func nextModel(chain []string, current string) string {
+	at := 0
+	if current != "" {
+		at = -1
+		for i, m := range chain {
+			if m == current {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			return ""
+		}
+	}
+	if at+1 >= len(chain) {
+		return ""
+	}
+	return chain[at+1]
+}
+
+// stop halts dispatch and announces it once. Re-announcing every pass would
+// bury the recovery notice under repeats of the same stop, so the detail is
+// what marks the condition as already reported.
+func (r *TaskQueueReconciler) stop(ctx context.Context, task *devplatformv1alpha1.TaskRequest, kind, detail string) {
+	if r.stopped == detail {
+		return
+	}
+	r.stopped = detail
+	log.FromContext(ctx).Info("dispatch stopped", "kind", kind, "detail", detail)
+	if r.Notify == nil {
+		return
+	}
+	var ws devplatformv1alpha1.Workspace
+	if err := r.Get(ctx, types.NamespacedName{Name: task.Spec.WorkspaceRef, Namespace: task.Namespace}, &ws); err != nil {
+		ws.Name = task.Spec.WorkspaceRef
+	}
+	r.Notify(ctx, &ws, kind, detail)
+}
+
+func (r *TaskQueueReconciler) resume() {
+	r.stopped = ""
+}
+
+// holdAll parks the rest of the queue under one reason.
 func (r *TaskQueueReconciler) holdAll(ctx context.Context, tasks []devplatformv1alpha1.TaskRequest, reason, message string) error {
 	for i := range tasks {
 		if err := r.hold(ctx, &tasks[i], reason, message); err != nil {

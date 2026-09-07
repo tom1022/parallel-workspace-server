@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"strconv"
+	"strings"
 
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -83,6 +84,11 @@ func main() {
 		// separate call to Anthropic: answering must not itself consume quota
 		// (7.10).
 		UsageObserver: &controller.SupervisorUsageObserver{Client: mgr.GetClient()},
+		// Empty leaves model switching off, which keeps a spent model window
+		// behaving like any other stop rather than silently moving work onto a
+		// model the operator did not choose.
+		ModelFallbacks: splitList(os.Getenv("MODEL_FALLBACKS")),
+		Notify:         controller.HermesNotifier(os.Getenv("HERMES_NOTIFY_URL")),
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create TaskQueue controller")
 		os.Exit(1)
@@ -93,4 +99,16 @@ func main() {
 		log.Error(err, "manager exited with error")
 		os.Exit(1)
 	}
+}
+
+// splitList reads a comma-separated env var, dropping blanks so an unset or
+// empty value yields no entries rather than one empty one.
+func splitList(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

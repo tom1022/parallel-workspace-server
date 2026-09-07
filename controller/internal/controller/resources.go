@@ -228,10 +228,16 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 	// configured for a per-branch database.
 	workspaceEnv = append(workspaceEnv, databaseEnv...)
 
-	// Left unset when the template does not pin one, so Claude Code applies its
-	// own default rather than this controller inventing a model name (7.3).
-	if tmpl.Spec.Model != "" {
-		workspaceEnv = append(workspaceEnv, corev1.EnvVar{Name: "ANTHROPIC_MODEL", Value: tmpl.Spec.Model})
+	// Left unset when neither the template nor a quota-driven switch pins one,
+	// so Claude Code applies its own default rather than this controller
+	// inventing a model name (7.3). The switched-to model wins: it is the
+	// template's model plus the knowledge that its window is spent (7.7).
+	model := tmpl.Spec.Model
+	if active := ws.Annotations[AnnotationActiveModel]; active != "" {
+		model = active
+	}
+	if model != "" {
+		workspaceEnv = append(workspaceEnv, corev1.EnvVar{Name: "ANTHROPIC_MODEL", Value: model})
 	}
 
 	volumes := []corev1.Volume{

@@ -43,6 +43,9 @@ spec:
             # キューに残る。
             - name: MAX_CONCURRENT_TASKS
               value: {{ required "taskQueue.maxConcurrent must be set" .Values.taskQueue.maxConcurrent | quote }}
+            # モデル別の利用枠に到達したときの切り替え順 (7.7)。
+            - name: MODEL_FALLBACKS
+              value: {{ join "," .Values.taskQueue.modelFallbacks | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

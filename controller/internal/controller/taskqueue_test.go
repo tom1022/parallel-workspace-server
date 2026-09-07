@@ -403,3 +403,213 @@ func TestTaskQueue_DispatchesWhenTheReadingIsUnavailable(t *testing.T) {
 		t.Errorf("task-0 = %q, want Running (an unreadable quota must not stall the queue)", got)
 	}
 }
+
+func activeModel(t *testing.T, ctx context.Context, ns, name string) string {
+	t.Helper()
+	var ws devplatformv1alpha1.Workspace
+	if err := testClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &ws); err != nil {
+		t.Fatalf("get Workspace %s: %v", name, err)
+	}
+	return ws.Annotations[AnnotationActiveModel]
+}
+
+// 7.7: a spent model window is survivable, so the task continues on the next
+// model in the chain rather than waiting for a reset.
+func TestTaskQueue_SwitchesModelWhenOnlyTheModelWindowIsSpent(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createReadyWorkspace(t, ctx, ns, "ws-a")
+	createTask(t, ctx, ns, "task-0", "ws-a")
+
+	var notes []recordedNotification
+	notify := recordingNotifier(&notes)
+	r := &TaskQueueReconciler{
+		Client:         testClient,
+		MaxConcurrent:  5,
+		ModelFallbacks: []string{"claude-opus-5", "claude-sonnet-5"},
+		Notify:         notify,
+		UsageObserver: &fakeObserver{reading: UsageReading{Snapshots: []UsageSnapshot{
+			snapshot("weekly", "Opus", 0),
+			snapshot("session", "", 70),
+		}}},
+	}
+	runQueue(t, ctx, r, ns)
+
+	if phase := taskPhases(t, ctx, ns)["task-0"]; phase != devplatformv1alpha1.TaskPhaseRunning {
+		t.Errorf("task-0 = %q, want Running (a model window must not stop the task)", phase)
+	}
+	if model := activeModel(t, ctx, ns, "ws-a"); model != "claude-sonnet-5" {
+		t.Errorf("active model = %q, want claude-sonnet-5", model)
+	}
+	if len(notes) != 0 {
+		t.Errorf("notified %v, want none: switching model is not a stop", notes)
+	}
+	if hits := r.recentQuotaHits; len(hits) != 1 || hits[0].Scope != QuotaScopeModel {
+		t.Errorf("recent quota hits = %v, want one model hit", hits)
+	}
+}
+
+// The chain has an end: with nothing left to switch to, the model window
+// becomes a stop like any other.
+func TestTaskQueue_HoldsWhenTheModelChainIsExhausted(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createReadyWorkspace(t, ctx, ns, "ws-a")
+	createTask(t, ctx, ns, "task-0", "ws-a")
+
+	var notes []recordedNotification
+	notify := recordingNotifier(&notes)
+	r := &TaskQueueReconciler{
+		Client:         testClient,
+		MaxConcurrent:  5,
+		ModelFallbacks: []string{"claude-opus-5"},
+		Notify:         notify,
+		UsageObserver: &fakeObserver{reading: UsageReading{Snapshots: []UsageSnapshot{
+			snapshot("weekly", "Opus", 0),
+		}}},
+	}
+	runQueue(t, ctx, r, ns)
+
+	if phase := taskPhases(t, ctx, ns)["task-0"]; phase != devplatformv1alpha1.TaskPhasePending {
+		t.Errorf("task-0 = %q, want Pending (no model left to switch to)", phase)
+	}
+	if len(notes) != 1 || notes[0].kind != EventQuotaExhausted {
+		t.Errorf("notifications = %v, want one QuotaExhausted", notes)
+	}
+}
+
+// 7.8: a spent session or weekly window stops dispatch, notifies, and waits.
+func TestTaskQueue_StopsAndNotifiesOnAnAccountWideQuota(t *testing.T) {
+	for _, group := range []string{"session", "weekly"} {
+		t.Run(group, func(t *testing.T) {
+			ctx := context.Background()
+			ns := newNamespace(t)
+			createReadyWorkspace(t, ctx, ns, "ws-a")
+			createReadyWorkspace(t, ctx, ns, "ws-b")
+			createTask(t, ctx, ns, "task-0", "ws-a")
+			createTask(t, ctx, ns, "task-1", "ws-b")
+
+			var notes []recordedNotification
+			notify := recordingNotifier(&notes)
+			r := &TaskQueueReconciler{
+				Client:        testClient,
+				MaxConcurrent: 5,
+				Notify:        notify,
+				UsageObserver: &fakeObserver{reading: UsageReading{Snapshots: []UsageSnapshot{snapshot(group, "", 0)}}},
+			}
+			runQueue(t, ctx, r, ns)
+
+			phases := taskPhases(t, ctx, ns)
+			if countPhase(phases, devplatformv1alpha1.TaskPhaseRunning) != 0 {
+				t.Errorf("phases = %v, want nothing dispatched", phases)
+			}
+			if len(notes) != 1 || notes[0].kind != EventQuotaExhausted {
+				t.Errorf("notifications = %v, want one QuotaExhausted", notes)
+			}
+
+			// The stop holds across passes and does not re-notify each time.
+			runQueue(t, ctx, r, ns)
+			if countPhase(taskPhases(t, ctx, ns), devplatformv1alpha1.TaskPhaseRunning) != 0 {
+				t.Error("dispatched on a later pass while still stopped")
+			}
+			if len(notes) != 1 {
+				t.Errorf("notifications = %v, want the stop announced once", notes)
+			}
+		})
+	}
+}
+
+// 7.9: an authentication error is not a throttle. It stops submission to every
+// workspace, including ones whose own quota is untouched.
+func TestTaskQueue_StopsEveryWorkspaceOnAnAuthError(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createReadyWorkspace(t, ctx, ns, "ws-a")
+	createReadyWorkspace(t, ctx, ns, "ws-b")
+	createTask(t, ctx, ns, "task-0", "ws-a")
+	createTask(t, ctx, ns, "task-1", "ws-b")
+
+	var notes []recordedNotification
+	notify := recordingNotifier(&notes)
+	r := &TaskQueueReconciler{
+		Client:        testClient,
+		MaxConcurrent: 5,
+		Notify:        notify,
+		UsageObserver: &fakeObserver{reading: UsageReading{
+			Snapshots: []UsageSnapshot{snapshot("session", "", 90)},
+			ErrorKind: "authentication_error",
+		}},
+	}
+	runQueue(t, ctx, r, ns)
+
+	phases := taskPhases(t, ctx, ns)
+	if countPhase(phases, devplatformv1alpha1.TaskPhaseRunning) != 0 {
+		t.Errorf("phases = %v, want nothing dispatched anywhere", phases)
+	}
+	var held devplatformv1alpha1.TaskRequest
+	if err := testClient.Get(ctx, types.NamespacedName{Name: "task-1", Namespace: ns}, &held); err != nil {
+		t.Fatalf("get task-1: %v", err)
+	}
+	if reason := heldReason(held); reason != "AuthError" {
+		t.Errorf("hold reason = %q, want AuthError", reason)
+	}
+	if len(notes) != 1 || notes[0].kind != EventAuthError {
+		t.Errorf("notifications = %v, want one AuthError", notes)
+	}
+}
+
+// A rate limit is a quota condition, not a credential one: it must not trip
+// the全面停止 that an auth error does.
+func TestTaskQueue_RateLimitErrorIsNotAnAuthStop(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createReadyWorkspace(t, ctx, ns, "ws-a")
+	createTask(t, ctx, ns, "task-0", "ws-a")
+
+	var notes []recordedNotification
+	notify := recordingNotifier(&notes)
+	r := &TaskQueueReconciler{
+		Client:        testClient,
+		MaxConcurrent: 5,
+		Notify:        notify,
+		UsageObserver: &fakeObserver{reading: UsageReading{
+			Snapshots: []UsageSnapshot{snapshot("session", "", 90)},
+			ErrorKind: "rate_limit_error",
+		}},
+	}
+	runQueue(t, ctx, r, ns)
+
+	if phase := taskPhases(t, ctx, ns)["task-0"]; phase != devplatformv1alpha1.TaskPhaseRunning {
+		t.Errorf("task-0 = %q, want Running", phase)
+	}
+	if len(notes) != 0 {
+		t.Errorf("notifications = %v, want none", notes)
+	}
+}
+
+// Recovery is what makes the stop a wait rather than an outage.
+func TestTaskQueue_ResumesOnceTheQuotaRecovers(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createReadyWorkspace(t, ctx, ns, "ws-a")
+	createTask(t, ctx, ns, "task-0", "ws-a")
+
+	obs := &fakeObserver{reading: UsageReading{Snapshots: []UsageSnapshot{snapshot("session", "", 0)}}}
+	var notes []recordedNotification
+	notify := recordingNotifier(&notes)
+	r := &TaskQueueReconciler{Client: testClient, MaxConcurrent: 5, Notify: notify, UsageObserver: obs}
+	runQueue(t, ctx, r, ns)
+	if phase := taskPhases(t, ctx, ns)["task-0"]; phase != devplatformv1alpha1.TaskPhasePending {
+		t.Fatalf("task-0 = %q, want Pending", phase)
+	}
+
+	obs.reading = UsageReading{Snapshots: []UsageSnapshot{snapshot("session", "", 55)}}
+	runQueue(t, ctx, r, ns)
+
+	if phase := taskPhases(t, ctx, ns)["task-0"]; phase != devplatformv1alpha1.TaskPhaseRunning {
+		t.Errorf("task-0 = %q, want Running after the window reset", phase)
+	}
+	if len(notes) != 1 {
+		t.Errorf("notifications = %v, want only the original stop", notes)
+	}
+}
