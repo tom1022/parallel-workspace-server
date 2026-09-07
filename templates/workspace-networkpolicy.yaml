@@ -34,6 +34,7 @@
 # 他 namespace の Secret への到達遮断はネットワーク到達性の話ではなく kube-apiserver 経由の
 # API アクセス制御の話のため、NetworkPolicy の対象外とする。Secret 保護は
 # controller-rbac.yaml の Role スコープ (workspaceNamespace 限定) 側で担保する (14.8)。
+{{- if .Values.workspaceNetworkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -121,3 +122,4 @@ spec:
           port: 53
         - protocol: UDP
           port: 53
+{{- end }}

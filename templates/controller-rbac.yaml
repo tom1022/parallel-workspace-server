@@ -64,6 +64,7 @@ roleRef:
   kind: Role
   name: devplatform-workspace-operator
   apiGroup: rbac.authorization.k8s.io
+{{- if .Values.controller.clusterNodeAccess.enabled }}
 ---
 # Node はクラスタスコープのため namespace 束縛の Role では権限を与えられない。15.4 の
 # 事前配置判定 (Node.status.images 参照) にのみ必要な read-only 権限を、他の全 namespace-scoped
@@ -89,3 +90,4 @@ roleRef:
   kind: ClusterRole
   name: devplatform-workspace-operator-nodes
   apiGroup: rbac.authorization.k8s.io
+{{- end }}

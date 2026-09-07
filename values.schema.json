@@ -66,6 +66,51 @@
       "minLength": 1,
       "description": "Workspace / WorkspaceTemplate を置くネームスペース。"
     },
+    "createWorkspaceNamespace": {
+      "type": "boolean",
+      "description": "workspaceNamespace という名前の Namespace リソースを生成するか (3.5/3.6)。false では利用者が事前に用意する。"
+    },
+    "workspaceQuota": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "workspaceNamespace への ResourceQuota を生成するか (3.5/3.6)。false では利用者が資源上限を自分で用意する。"
+        }
+      }
+    },
+    "workspaceNetworkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "workspaceNamespace への NetworkPolicy (通信制限) を生成するか (3.5/3.6)。false では利用者が同等の制限を自分で用意する。"
+        }
+      }
+    },
+    "priorityClass": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "workspaceTemplate.priorityClassName と同名の PriorityClass を生成するか (3.5/3.6)。false では利用者が事前に用意する。"
+        }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "properties": {
+        "clusterNodeAccess": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "ノード read-only の ClusterRole/ClusterRoleBinding を生成するか (3.5/3.6)。false ではイメージ事前配置チェックが機能しなくなる。"
+            }
+          }
+        }
+      }
+    },
     "workspaceImage": {
       "type": "object",
       "required": ["repository", "tag"],

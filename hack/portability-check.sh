@@ -61,6 +61,11 @@ optional_deps_disabled() {
     --set infisical.evacuation.enabled=false \
     --set controller.persistence.enabled=false \
     --set workspaceTemplate.database.enabled=false \
+    --set createWorkspaceNamespace=false \
+    --set workspaceQuota.enabled=false \
+    --set workspaceNetworkPolicy.enabled=false \
+    --set priorityClass.enabled=false \
+    --set controller.clusterNodeAccess.enabled=false \
     >/dev/null 2>&1
 }
 check "render succeeds with all optional dependencies disabled" optional_deps_disabled

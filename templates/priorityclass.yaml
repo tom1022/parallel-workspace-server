@@ -3,10 +3,12 @@
 # (grep -rln priorityClassName apps/ に devplatform 以外のヒットなし)。それより確実に低い
 # 負値を設定し、ノードのリソース逼迫時にワークスペース Pod を先に退避対象にする (15.10)。
 # globalDefault: false とし、既存アプリの priorityClassName を変更せずとも影響を与えない。
+{{- if .Values.priorityClass.enabled }}
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
-  name: devplatform-workspace
+  name: {{ .Values.workspaceTemplate.priorityClassName }}
 value: -100
 globalDefault: false
 description: "ワークスペース Pod 専用。既存アプリ(優先度0)より低い優先度で、ノード逼迫時に先に退避対象となる。"
+{{- end }}

@@ -90,6 +90,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `controller.image.repository`/`tag`/`digest` | Workspace Controller イメージ参照 | 公開レジストリの既定イメージ | 省略可 |
 | `controller.nodeSelector` | 制御プレーンの配置制約 | `{}` (制約なし) | 省略可 |
 | `controller.persistence.enabled`/`storageClass`/`size` | 制御プレーンのローカルキャッシュ用 PVC (現状未使用) | 無効、StorageClass はクラスタ既定 | 省略可 |
+| `controller.clusterNodeAccess.enabled` | ノード read-only の ClusterRole/ClusterRoleBinding (`devplatform-workspace-operator-nodes`) を生成するか (3.5/3.6) | `true` | 省略可。`false` にするとイメージ事前配置チェック (15.4) が機能しなくなる (ワークスペースの払い出し自体は継続する) |
 | `gateway.image.repository`/`tag`/`digest` | Terminal Gateway イメージ参照 | 公開レジストリの既定イメージ | 省略可 |
 | `gateway.replicas`/`port` | ゲートウェイの Pod 数・待受ポート | `1` / `8080` | 省略可 |
 | `gateway.domain` | ワークスペースのホスト名が属する公開ドメイン | なし | **必須** |
@@ -104,6 +105,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `routing.workspaceMiddlewares`/`apiMiddlewares` | Traefik IngressRoute に付与する中間処理の完全修飾名 | `[]` (付与しない) | 省略可 |
 | `routing.ingressNamespace`/`ingressPodSelector` | ルーティング実装がワークスペースへ到達するための NetworkPolicy 許可元 | `kube-system` / `app.kubernetes.io/name: traefik` (Traefik 同梱の k3s を既定と仮定) | 省略可。空にするとこの経路を許可しない |
 | `workspaceNamespace` | Workspace/WorkspaceTemplate を置くネームスペース | `devplatform-workspaces` | **必須** |
+| `createWorkspaceNamespace` | `workspaceNamespace` という名前の Namespace リソースを生成するか (3.5/3.6) | `true` | 省略可。`false` にする場合、運用者が同名の Namespace を配備前に用意する |
 | `subnetRouterNamespace` | VPN 等、任意経路の subnet router が居るネームスペース | `""` (経路を開かない) | 省略可 |
 | `database.namespace` | ブランチ専用データベースの egress 許可先ネームスペース (NetworkPolicy 用)。`workspaceTemplate.database.enabled` (機能自体の有効/無効) とは別の値 | `devplatform-db` | 省略可。空にすると egress 規則を生成しない |
 | `objectStorage.namespace` | 退避先オブジェクトストレージの egress 許可先ネームスペース | `garage` | 省略可。空にすると egress 規則を生成しない |
@@ -111,6 +113,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `workspaceTemplate.resources`/`storage` | 既定 WorkspaceTemplate の CPU/メモリ/作業ディレクトリ容量 | チャート既定値 | 省略可 |
 | `workspaceTemplate.nodeName` | ワークスペースの配置先ノード | `""` (制約なし) | 省略可。ノード固定の StorageClass を使うなら実質必須 |
 | `workspaceTemplate.priorityClassName` | ワークスペース Pod の PriorityClass | `devplatform-workspace` (この chart が生成) | 省略可 |
+| `priorityClass.enabled` | `workspaceTemplate.priorityClassName` と同名の PriorityClass を生成するか (3.5/3.6) | `true` | 省略可。`false` にする場合、運用者が同名の PriorityClass を配備前に用意する |
 | `workspaceTemplate.model` | 既定モデル | `""` (Claude Code 既定) | 省略可 |
 | `workspaceTemplate.database.enabled` | ブランチ専用データベースを使うか (3.4/3.5)。false ではコントローラが CNPG 資源を一切生成せず、配備される WorkspaceTemplate も `spec.database` を含めない — ワークスペースはデータベースなしで払い出される | `true` | 省略可 |
 | `workspaceTemplate.database.clusterRef` | ブランチ専用データベースへの参照名 | なし | `enabled: true` の場合のみ必須 |
@@ -119,7 +122,9 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `workspaceTemplate.evacuation.endpoint`/`region` | 退避先の S3 互換エンドポイント・リージョン。特定の実装に固定しない | この chart が同梱する Garage のクラスタ内エンドポイント | **必須**。別の S3 互換実装を使う場合はここを差し替える |
 | `taskQueue.maxConcurrent` | 同時実行 Claude Code タスク数の上限 | `2` | **必須** |
 | `taskQueue.modelFallbacks` | モデル別利用枠が尽きたときの切り替え順 | `[]` (切り替えない) | 省略可 |
-| `workspaceQuota.*` | ワークスペース用ネームスペースの ResourceQuota | クラスタ数個分の保守的な値 | 省略可 |
+| `workspaceQuota.enabled` | `workspaceNamespace` への ResourceQuota を生成するか (3.5/3.6) | `true` | 省略可。`false` にする場合、運用者が同等の資源上限を配備前に用意する |
+| `workspaceQuota.maxPods`/`requestsCpu`/`requestsMemory`/`limitsCpu`/`limitsMemory` | ワークスペース用ネームスペースの ResourceQuota の値 | クラスタ数個分の保守的な値 | 省略可 |
+| `workspaceNetworkPolicy.enabled` | `workspaceNamespace` への NetworkPolicy (`devplatform-workspace-isolation`、14.7/14.8) を生成するか (3.5/3.6) | `true` | 省略可。`false` にする場合、運用者が同等の通信制限を配備前に用意する |
 | `evacuationCredentials.autoProvision.enabled` | クラスタ内 Garage への退避資格情報自動発行 | `true` | 省略可 |
 | `evacuationCredentials.autoProvision.garage.*` | 自動発行が参照する Garage の namespace/Pod セレクタ/鍵名 | チャート既定値 | `autoProvision.enabled: true` の場合のみ必須 |
 | `infisical.enabled` | Infisical Operator による秘匿情報同期を使うか (3.3) | `false` (利用者が用意した Secret を `workspaceTemplate.auth.secretRef`/`infisical.inferenceCredentialsSecretName` として直接参照する) | 省略可 |

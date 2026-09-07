@@ -29,6 +29,13 @@ controller:
     # 省略時はクラスタの既定 StorageClass を使う。
     storageClass: ""
     size: 1Gi
+  # ノードの get/list/watch のみを許す ClusterRole/ClusterRoleBinding
+  # (devplatform-workspace-operator-nodes) を生成するか (3.5/3.6)。無効にすると
+  # 15.4 のイメージ事前配置チェックが機能しなくなる (ワークスペースの払い出し自体は
+  # 継続する)。namespace 内で完結する ServiceAccount/Role/RoleBinding は本トグルの
+  # 対象外で常に生成する。
+  clusterNodeAccess:
+    enabled: true
 
 # Terminal Gateway (共有端末ゲートウェイ)。ホスト名解決を都度 Kubernetes API へ
 # 問い合わせるだけのステートレス構成のため永続データを持たない。
@@ -118,6 +125,10 @@ routing:
 # 置くと同じ RBAC で参照できなくなる。
 workspaceNamespace: devplatform-workspaces
 
+# workspaceNamespace という名前の Namespace リソースをこの chart が生成するか (3.5/3.6)。
+# false にする場合、運用者が配備前に同名の Namespace を自分で用意しておく前提になる。
+createWorkspaceNamespace: true
+
 # 統合開発環境からの任意経路 (4.7) の単一到達点である subnet router が居るネームスペース。
 # workspace-networkpolicy.yaml が、ワークスペース Pod の sshd へ到達してよい唯一の
 # 外部ネームスペースとして参照する。空文字の間はこの経路を許可しない (課さない)。
@@ -206,11 +217,25 @@ taskQueue:
 # (ワークスペース数個 + テスト実行分を想定) であり、クラスタの実容量見積もり (本 spec の
 # 範囲外) を踏まえて運用者が配備時に上書きする前提。workspace-quota.yaml が参照する。
 workspaceQuota:
+  # false にする場合、運用者が workspaceNamespace 側の資源上限を自分で用意する前提になる。
+  enabled: true
   maxPods: "5"
   requestsCpu: "2"
   requestsMemory: "4Gi"
   limitsCpu: "4"
   limitsMemory: "8Gi"
+
+# ワークスペース専用ネームスペースの NetworkPolicy (devplatform-workspace-isolation、
+# 14.7/14.8) を生成するか (3.5/3.6)。false にする場合、運用者が同等の通信制限を
+# 自分で用意する前提になる。
+workspaceNetworkPolicy:
+  enabled: true
+
+# ワークスペース Pod 用 PriorityClass (workspaceTemplate.priorityClassName と同じ名前) を
+# 生成するか (3.5/3.6)。false にする場合、運用者が workspaceTemplate.priorityClassName と
+# 同じ名前の PriorityClass を事前に用意する前提になる。
+priorityClass:
+  enabled: true
 
 # 退避先 S3 資格情報の自動発行 (16.7-16.9)。退避先がクラスタ内 Garage の場合、鍵の
 # 発行元は他に存在しないため配備時に作る。外部 S3 を使う場合は enabled: false にし、

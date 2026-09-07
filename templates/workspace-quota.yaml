@@ -2,6 +2,7 @@
 # ワークスペース専用ネームスペースの ResourceQuota (15.5)。Pod数・合計CPU・合計メモリの
 # 上限を values.yaml の workspaceQuota から与える。既定値は保守的な小さめの値であり、
 # クラスタの実容量 (本 spec の範囲外) を踏まえて運用者が配備時に上書きする前提。
+{{- if .Values.workspaceQuota.enabled }}
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -14,3 +15,4 @@ spec:
     requests.memory: {{ .Values.workspaceQuota.requestsMemory | quote }}
     limits.cpu: {{ .Values.workspaceQuota.limitsCpu | quote }}
     limits.memory: {{ .Values.workspaceQuota.limitsMemory | quote }}
+{{- end }}
