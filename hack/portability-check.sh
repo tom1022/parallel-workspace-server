@@ -97,7 +97,20 @@ conditional_dependency_missing_fails() {
     --set infisical.enabled=true 2>&1)" && return 1
   grep -q "projectId" <<<"$out"
 }
-# 5. ワーキングツリーに秘匿情報らしき文字列が紛れ込んでいない (git-secrets 相当の簡易検査)。
+# 5. 外部の識別基盤(OIDC)連携は任意機能 (4.2)。無効(既定)のままなら issuer/audience/jwksUrl
+#    を与えなくてもレンダリングが成立し、有効にした場合だけそれらが必須になる (条件付き必須, 4.8-4.10)。
+oidc_conditionally_required() {
+  local out
+  helm template devplatform . \
+    --set gateway.domain=example.internal --set gateway.tls.secretName=example-gateway-tls \
+    >/dev/null 2>&1 || return 1
+
+  out="$(helm template devplatform . \
+    --set gateway.domain=example.internal --set gateway.tls.secretName=example-gateway-tls \
+    --set gateway.oidc.enabled=true 2>&1)" && return 1
+  grep -q "issuer" <<<"$out"
+}
+# 6. ワーキングツリーに秘匿情報らしき文字列が紛れ込んでいない (git-secrets 相当の簡易検査)。
 # PEM 秘密鍵ヘッダと AWS アクセスキー ID は語として一意なため repo 全体を対象にできるが、
 # password/secret/token 等はソース中の識別子 (変数名・struct フィールド名) と大量に衝突するため、
 # 対象を設定ファイル (yaml/yml/json/env) に絞る。
@@ -147,6 +160,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   check "render succeeds with all optional dependencies disabled" optional_deps_disabled
   check "rendering fails and names the missing required value" required_value_missing_fails
   check "enabling a feature without its required dependency fails rendering" conditional_dependency_missing_fails
+  check "oidc issuer/audience/jwksUrl are required only when gateway.oidc.enabled=true" oidc_conditionally_required
   check "no secret-like strings in worktree" no_secrets_in_worktree
   exit $fail
 fi

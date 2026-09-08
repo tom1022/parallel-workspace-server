@@ -59,9 +59,12 @@ gateway:
   # (cert-manager + reflector 等でこのネームスペースへ複製しておく)。
   tls:
     secretName: ""
-  # Bearer JWT の検証パラメータ。audience は外部 IdP 側のクライアント識別子と
-  # 一致させる。必須 (4.x でローカル認証と併用/差し替え可能にする予定)。
+  # 外部の識別基盤 (OIDC プロバイダ) との連携。既定 false ではゲートウェイが自身で
+  # 保持する利用者のみで認証する (4.2)。true にすると issuer/audience/jwksUrl が
+  # 必須になり (values.schema.json の allOf)、当該基盤で認証された呼び出し元も
+  # 受け入れる (4.8)。audience は外部 IdP 側のクライアント識別子と一致させる。
   oidc:
+    enabled: false
     issuer: ""
     audience: ""
     jwksUrl: ""

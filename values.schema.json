@@ -31,11 +31,14 @@
         },
         "oidc": {
           "type": "object",
-          "required": ["issuer", "audience", "jwksUrl"],
           "properties": {
-            "issuer": { "type": "string", "minLength": 1 },
-            "audience": { "type": "string", "minLength": 1 },
-            "jwksUrl": { "type": "string", "minLength": 1 }
+            "enabled": {
+              "type": "boolean",
+              "description": "外部の識別基盤 (OIDC プロバイダ) との連携を使うか (4.8-4.10)。既定 false ではゲートウェイが自身で保持する利用者のみで認証し、issuer/audience/jwksUrl は不要。"
+            },
+            "issuer": { "type": "string" },
+            "audience": { "type": "string" },
+            "jwksUrl": { "type": "string" }
           }
         }
       }
@@ -274,6 +277,39 @@
                 "properties": {
                   "name": { "type": "string", "minLength": 1 },
                   "namespace": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "外部の識別基盤(OIDCプロバイダ)と連携する場合(gateway.oidc.enabled=true)、検証に必要な接続情報が要る(4.8-4.10)。",
+      "if": {
+        "properties": {
+          "gateway": {
+            "properties": {
+              "oidc": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              }
+            },
+            "required": ["oidc"]
+          }
+        },
+        "required": ["gateway"]
+      },
+      "then": {
+        "properties": {
+          "gateway": {
+            "properties": {
+              "oidc": {
+                "required": ["issuer", "audience", "jwksUrl"],
+                "properties": {
+                  "issuer": { "type": "string", "minLength": 1 },
+                  "audience": { "type": "string", "minLength": 1 },
+                  "jwksUrl": { "type": "string", "minLength": 1 }
                 }
               }
             }
