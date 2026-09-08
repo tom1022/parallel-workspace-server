@@ -89,6 +89,62 @@ func TestReconcile_HoldsForImageNotStaged(t *testing.T) {
 	assertHeldForResourceWaiting(t, ctx, ns, "ws-unstaged", "ImageNotStaged")
 }
 
+// TestReconcile_ImageStagedByDigestOnly covers the real-cluster shape:
+// WorkspaceTemplate.Spec.Image carries a tag+digest reference
+// (repo:tag@sha256:...), but kubelet normalizes Node.Status.Images entries
+// to the digest-only form (repo@sha256:...) once the tag is stripped during
+// the pull, so a naive full-string comparison never matches and provisioning
+// stalls forever with ImageNotStaged even though the image is present.
+func TestReconcile_ImageStagedByDigestOnly(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+
+	const (
+		taggedImage = "ghcr.io/tom1022/devplatform-workspace:v0.1.4@sha256:23a81cc018f6c29e04e13b0ed7bb11054c9fc95a63081e070acd11694b7184e7"
+		nodeImage   = "ghcr.io/tom1022/devplatform-workspace@sha256:23a81cc018f6c29e04e13b0ed7bb11054c9fc95a63081e070acd11694b7184e7"
+	)
+
+	tmpl := &devplatformv1alpha1.WorkspaceTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "digest-only", Namespace: ns},
+		Spec: devplatformv1alpha1.WorkspaceTemplateSpec{
+			Image: taggedImage,
+			Resources: devplatformv1alpha1.WorkspaceResources{
+				Requests: devplatformv1alpha1.ResourceList{CPU: "100m", Memory: "128Mi"},
+				Limits:   devplatformv1alpha1.ResourceList{CPU: "500m", Memory: "256Mi"},
+			},
+			Storage:    devplatformv1alpha1.WorkspaceStorage{Size: "1Gi"},
+			NodeName:   "node-digest-only",
+			Database:   &devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"},
+			Auth:       devplatformv1alpha1.WorkspaceAuthRef{SecretRef: "claude-auth"},
+			Evacuation: devplatformv1alpha1.WorkspaceEvacuation{Bucket: "workspace", Endpoint: "http://garage.garage.svc.cluster.local:3900", Region: "garage", SecretRef: "garage-evacuation-credentials"},
+		},
+	}
+	if err := testClient.Create(ctx, tmpl); err != nil {
+		t.Fatalf("create WorkspaceTemplate: %v", err)
+	}
+	// Node advertises the digest-only form, not the tagged reference the
+	// template declares.
+	ensureStagedNode(t, ctx, tmpl.Spec.NodeName, nodeImage)
+
+	createWorkspace(t, ctx, ns, "ws-digest-only", "https://gitea.fickledev.com/tom1022/demo.git", "feature/digest-only", "digest-only")
+
+	r := newTestReconciler()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ws-digest-only", Namespace: ns}}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var ws devplatformv1alpha1.Workspace
+	if err := testClient.Get(ctx, types.NamespacedName{Name: "ws-digest-only", Namespace: ns}, &ws); err != nil {
+		t.Fatalf("get Workspace: %v", err)
+	}
+	for _, c := range ws.Status.Conditions {
+		if c.Type == conditionResourceWaiting && c.Status == metav1.ConditionTrue && c.Reason == "ImageNotStaged" {
+			t.Fatalf("held with ImageNotStaged even though the node advertises the same image by digest: %+v", ws.Status.Conditions)
+		}
+	}
+}
+
 func TestReconcile_HoldsForResourceQuotaExceeded(t *testing.T) {
 	ctx := context.Background()
 	ns := newNamespace(t)

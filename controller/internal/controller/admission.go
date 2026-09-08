@@ -18,6 +18,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -113,6 +114,13 @@ func (r *WorkspaceReconciler) admissionBlocked(ctx context.Context, ws *devplatf
 // pulled its image, so the node's own advertised image cache
 // (Node.status.images, standard Kubernetes API field) is the pre-stage
 // signal — no extra propagation mechanism (e.g. a Node label) is needed.
+//
+// A template image is often a tag+digest reference (repo:tag@sha256:...),
+// but kubelet records the pulled image under its digest-only form
+// (repo@sha256:...) once it resolves the tag, so an exact string match
+// against Node.status.images never fires for that (common, real-cluster)
+// shape. Falling back to a digest-suffix comparison covers it without
+// losing the exact match for plain tag references.
 func (r *WorkspaceReconciler) imageStagedOnNode(ctx context.Context, nodeName, image string) (bool, error) {
 	var node corev1.Node
 	if err := r.nodeReader().Get(ctx, types.NamespacedName{Name: nodeName}, &node); err != nil {
@@ -121,14 +129,27 @@ func (r *WorkspaceReconciler) imageStagedOnNode(ctx context.Context, nodeName, i
 		}
 		return false, err
 	}
+	digest := imageDigestSuffix(image)
 	for _, img := range node.Status.Images {
 		for _, name := range img.Names {
 			if name == image {
 				return true, nil
 			}
+			if digest != "" && strings.HasSuffix(name, digest) {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
+}
+
+// imageDigestSuffix returns the "@sha256:..." suffix of an image reference,
+// or "" if it carries no digest.
+func imageDigestSuffix(image string) string {
+	if i := strings.Index(image, "@sha256:"); i >= 0 {
+		return image[i:]
+	}
+	return ""
 }
 
 // resourceQuotaHasRoom checks 15.6 against the namespace ResourceQuota's
