@@ -51,6 +51,8 @@ jobs:
         with:
           go-version-file: supervisor/go.mod
       - name: DEBUG script/pty attach
+        env:
+          TERM: xterm
         run: |
           which script && script --version || true
           tmux -L dbg new-session -d -s w -c /tmp sh -c 'cat > /tmp/typed.txt'
