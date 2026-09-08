@@ -69,6 +69,18 @@ rules:
     resources: ["secrets"]
     resourceNames: ["{{ .Values.gateway.ssh.caSecretName }}"]
     verbs: ["get"]
+  # 利用者ストア・初期資格情報・セッション署名鍵 (Identity Bootstrap/Session Issuer が
+  # 起動時に確定させる)。update が要るのは利用者ストアだけ (資格情報変更)。
+  # 初期資格情報とセッション鍵は作成後不変 (ensureSecretKey / publishInitialCredential
+  # はいずれも既存があれば読むだけで上書きしない)。
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["devplatform-gateway-users", "devplatform-gateway-initial-credential", "devplatform-gateway-session-key"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["devplatform-gateway-users"]
+    verbs: ["update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
