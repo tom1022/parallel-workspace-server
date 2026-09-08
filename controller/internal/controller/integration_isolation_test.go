@@ -376,11 +376,6 @@ func TestIsolationWorkspaceOperatorIsDeniedOutsideItsScope(t *testing.T) {
 	wsNS := isolationIntChartValue(t, "workspaceNamespace")
 	isolationIntEnsureNamespace(t, ctx, isolationIntReleaseNS)
 	isolationIntEnsureNamespace(t, ctx, wsNS)
-	// database.namespace (devplatform-db, matching wantEgress above) must
-	// exist before isolationIntApplyRBAC: the chart now also binds the
-	// operator's Role there (3.5's CNPG Database/DatabaseRole access), and
-	// applying a Role against a missing namespace fails outright.
-	isolationIntEnsureNamespace(t, ctx, "devplatform-db")
 	isolationIntApplyRBAC(t, ctx)
 	otherNS := newNamespace(t)
 

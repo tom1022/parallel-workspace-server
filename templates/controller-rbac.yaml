@@ -14,8 +14,9 @@ metadata:
 # clusterrolebindings等のクラスタスコープ動詞は含めない。
 #
 # ここに含めるのは workspaceNamespace 内で完結するリソースのみ。ブランチ専用 DB の
-# Database/DatabaseRole (postgresql.cnpg.io) は database.namespace に存在するため
-# 本 Role の対象外とし、下に別の namespace-scoped Role/RoleBinding を持つ。
+# Database/DatabaseRole (postgresql.cnpg.io) は CNPG クラスタ自体とは別の namespace
+# (database.namespace) にあるCNPGクラスタを clusterRef で参照しつつ、CR自体は
+# ワークスペースと同じ workspaceNamespace に作られるため、ここに含める。
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -49,6 +50,11 @@ rules:
   - apiGroups: [""]
     resources: ["resourcequotas"]
     verbs: ["get", "list", "watch"]
+{{- if .Values.workspaceTemplate.database.enabled }}
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["databases", "databaseroles"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -63,35 +69,6 @@ roleRef:
   kind: Role
   name: devplatform-workspace-operator
   apiGroup: rbac.authorization.k8s.io
-{{- if .Values.workspaceTemplate.database.enabled }}
----
-# CNPG の Database/DatabaseRole は database.namespace (workspaceNamespace とは別) に
-# 存在するため、上の namespace-scoped Role では届かない。ブランチ専用DBの用意/解放
-# (Database Adapter, 3.5) のためだけに、同じ SA をこの namespace にも束縛する。
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: devplatform-workspace-operator-database
-  namespace: {{ .Values.database.namespace }}
-rules:
-  - apiGroups: ["postgresql.cnpg.io"]
-    resources: ["databases", "databaseroles"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: devplatform-workspace-operator-database
-  namespace: {{ .Values.database.namespace }}
-subjects:
-  - kind: ServiceAccount
-    name: devplatform-workspace-operator
-    namespace: {{ .Release.Namespace }}
-roleRef:
-  kind: Role
-  name: devplatform-workspace-operator-database
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
 {{- if .Values.controller.clusterNodeAccess.enabled }}
 ---
 # Node はクラスタスコープのため namespace 束縛の Role では権限を与えられない。15.4 の
