@@ -439,6 +439,40 @@ func TestBuildStatefulSet_BootstrapsTheDatabaseAfterTheCheckout(t *testing.T) {
 	}
 }
 
+// TestBuildStatefulSet_InitContainersDeclareResources covers 15.6: a
+// namespace ResourceQuota that requires resources on every container (the
+// common shape, since Kubernetes quota accounting only works that way)
+// rejects the whole Pod outright if any initContainer omits requests/limits
+// — workspace-init and, when a database is configured, db-bootstrap must
+// carry the same resources as the main container.
+func TestBuildStatefulSet_InitContainersDeclareResources(t *testing.T) {
+	ws, tmpl := supervisorTestWorkspace()
+	ws.Namespace = "devplatform-workspaces"
+	tmpl.Spec.Database = &devplatformv1alpha1.WorkspaceDatabaseRef{ClusterRef: "devplatform-db"}
+
+	sts, err := buildStatefulSet(ws, tmpl, "feature-supervisor")
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+
+	inits := sts.Spec.Template.Spec.InitContainers
+	if len(inits) != 2 {
+		t.Fatalf("init containers = %d, want workspace-init and db-bootstrap", len(inits))
+	}
+	want := sts.Spec.Template.Spec.Containers[0].Resources
+	for _, c := range inits {
+		if c.Resources.Requests.Cpu().IsZero() || c.Resources.Requests.Memory().IsZero() {
+			t.Errorf("init container %q has no resource requests, quota that requires them on every container rejects the whole Pod", c.Name)
+		}
+		if c.Resources.Limits.Cpu().IsZero() || c.Resources.Limits.Memory().IsZero() {
+			t.Errorf("init container %q has no resource limits, quota that requires them on every container rejects the whole Pod", c.Name)
+		}
+		if c.Resources.Requests.Cpu().Cmp(*want.Requests.Cpu()) != 0 || c.Resources.Limits.Cpu().Cmp(*want.Limits.Cpu()) != 0 {
+			t.Errorf("init container %q resources = %+v, want the same as the workspace container %+v", c.Name, c.Resources, want)
+		}
+	}
+}
+
 // TestBuildStatefulSet_NoDatabaseOmitsDatabaseResources covers Requirement
 // 3.5: a WorkspaceTemplate with no database configured (Spec.Database == nil)
 // must not carry any trace of one on the generated Pod — the branch has no

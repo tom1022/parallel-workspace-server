@@ -305,6 +305,11 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{Name: databaseCertVolumeName, MountPath: databaseCertMountPath, ReadOnly: true})
 	}
 
+	// 15.6: a namespace ResourceQuota that requires resources on every
+	// container rejects the whole Pod if any initContainer omits them, so
+	// both init containers carry the same requests/limits as the workspace
+	// container rather than running unbounded.
+	initResources := corev1.ResourceRequirements{Requests: requests, Limits: limits}
 	initContainers := []corev1.Container{
 		{
 			Name:         "workspace-init",
@@ -312,6 +317,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 			Command:      []string{"sh", "-c", workspaceInitScript},
 			Env:          initEnv,
 			VolumeMounts: volumeMounts,
+			Resources:    initResources,
 		},
 	}
 	if dbEnabled {
@@ -326,6 +332,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 			Command:      []string{supervisorBinaryPath, "dbboot"},
 			Env:          append(append([]corev1.EnvVar{}, initEnv...), databaseEnv...),
 			VolumeMounts: volumeMounts,
+			Resources:    initResources,
 		})
 	}
 
