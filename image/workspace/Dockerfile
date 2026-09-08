@@ -3,24 +3,23 @@
 # 環境固有の値を一切含めない。ここに入るのは実行環境を問わない道具立てだけで、
 # 認証局・ホスト名・利用者に紐づく値はすべて実行時に Pod へ供給する。
 #
-# ビルド・push はこのリポジトリの範囲外 (CI 非稼働の Gitea リモートのため手動運用)。
-# ビルドコンテキストは apps/devplatform: Session Supervisor を supervisor/ から
-# ビルドするため、image/workspace ではコンテキストが足りない。
+# ビルドコンテキストはリポジトリルート: Session Supervisor を supervisor/ から
+# ビルドするため、image/workspace 単体ではコンテキストが足りない。
 #   TAG=$(date +%Y%m%d)-$(git rev-parse --short HEAD)
-#   docker build -f apps/devplatform/image/workspace/Dockerfile \
-#     -t ghcr.io/tom1022/devplatform-workspace:$TAG apps/devplatform
+#   docker build -f image/workspace/Dockerfile \
+#     -t ghcr.io/tom1022/devplatform-workspace:$TAG .
 #   docker push ghcr.io/tom1022/devplatform-workspace:$TAG
 #   docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/tom1022/devplatform-workspace:$TAG
 # 得られた digest を values.yaml の workspaceImage.digest へ設定する
 # (workspaceTemplate 実体の参照はそこから組み立てられる)。
 # タグは日付+短縮コミットSHAの組み合わせのみを使い、latest 等の可変タグは push しない (15.2)。
 
-FROM golang:1.26-alpine AS supervisor-build
+FROM golang:1.26-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS supervisor-build
 WORKDIR /src
 COPY supervisor/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/supervisor ./cmd/supervisor
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 
 ENV DEBIAN_FRONTEND=noninteractive
 

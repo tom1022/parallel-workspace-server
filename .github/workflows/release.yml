@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-controller-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: controller
+          file: controller/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/devplatform-controller:${{ github.ref_name }}
+
+  build-gateway-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: gateway
+          file: gateway/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/devplatform-gateway:${{ github.ref_name }}
+
+  build-workspace-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # ビルドコンテキストはリポジトリルート (image/workspace/Dockerfile 冒頭のコメント参照):
+      # supervisor/ を Session Supervisor のビルドに使うため image/workspace 単体ではコンテキストが足りない。
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: image/workspace/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/devplatform-workspace:${{ github.ref_name }}
+
+  release-chart:
+    runs-on: ubuntu-latest
+    # 3 イメージすべての公開が成功して初めて chart を公開する。どれか1つでも失敗すれば
+    # chart は公開されず、「chart はあるがイメージがない」半端な状態を利用者に見せない。
+    needs: [build-controller-image, build-gateway-image, build-workspace-image]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure git identity for gh-pages publish
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      # chart はリポジトリ直下に配置されている (charts/ 配下のサブディレクトリではない)。
+      # helm/chart-releaser-action の charts_dir はリポジトリ内の複数チャートを前提にした
+      # 「変更検知」ロジック (charts_dir 配下の変更差分をパス階層で chart ディレクトリに
+      # 丸めてから Chart.yaml の有無を見る) を内蔵しており、charts_dir を "." にすると
+      # 差分に含まれるトップレベルの各ファイル/ディレクトリ (Chart.yaml, controller/ 等) が
+      # そのまま「chart 候補ディレクトリ」として扱われる。Chart.yaml はファイルなので
+      # ディレクトリ判定で弾かれ、controller/ 等のディレクトリには Chart.yaml が無いため
+      # 弾かれ、結果としてリリース対象チャートが常に検出されない (実機で cr.sh を読んで確認済み)。
+      # そのため action ではなく cr バイナリを直接呼び、対象を明示的にリポジトリ直下 1 か所に固定する。
+      - name: Install cr
+        run: |
+          curl -fsSL -o /tmp/cr.tar.gz \
+            https://github.com/helm/chart-releaser/releases/download/v1.7.0/chart-releaser_1.7.0_linux_amd64.tar.gz
+          tar -xzf /tmp/cr.tar.gz -C /tmp cr
+          install -m 0755 /tmp/cr /usr/local/bin/cr
+      - name: Package chart
+        run: cr package . --package-path .cr-release-packages
+      - name: Upload chart package to GitHub Releases
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          cr upload \
+            --owner "$owner" \
+            --git-repo "$repo" \
+            --package-path .cr-release-packages \
+            --commit "${{ github.sha }}" \
+            --skip-existing
+      - name: Update chart repo index on gh-pages
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          cr index \
+            --owner "$owner" \
+            --git-repo "$repo" \
+            --package-path .cr-release-packages \
+            --push
