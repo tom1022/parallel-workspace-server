@@ -61,3 +61,11 @@ jobs:
       # values.yaml は利用者が埋める前提の必須値を空文字列のまま置いているため、
       # 素の helm lint は values.schema.json の検証で必ず失敗する。
       - run: helm lint . -f hack/testdata/minimal-values.yaml
+
+  portability-gate:
+    runs-on: ubuntu-latest
+    needs: [chart-lint]
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash hack/portability-check.test.sh
+      - run: bash hack/portability-check.sh

@@ -42,7 +42,7 @@ check() {
 #    レンダリングが成立し、禁止識別子が生成物に現れない。
 minimal_render_no_leak() {
   local out
-  out="$(helm template devplatform . -f "$MINIMAL_VALUES" 2>&1)" || return 1
+  out="$(helm template devplatform . -f "$MINIMAL_VALUES" "$@" 2>&1)" || return 1
   for id in "${FORBIDDEN_IDENTIFIERS[@]}"; do
     if grep -qF -- "$id" <<<"$out"; then
       echo "  forbidden identifier leaked: $id" >&2
@@ -51,8 +51,6 @@ minimal_render_no_leak() {
   done
   return 0
 }
-check "minimal render succeeds and leaks no forbidden identifier" minimal_render_no_leak
-
 # 2. 任意依存をすべて無効にした構成でもレンダリングが成立する。
 optional_deps_disabled() {
   helm template devplatform . -f "$MINIMAL_VALUES" \
@@ -68,8 +66,6 @@ optional_deps_disabled() {
     --set controller.clusterNodeAccess.enabled=false \
     >/dev/null 2>&1
 }
-check "render succeeds with all optional dependencies disabled" optional_deps_disabled
-
 # 3. 必須値を欠くとレンダリングが失敗し、不足している値の名前がエラーに含まれる。
 required_value_missing_fails() {
   local out
@@ -87,8 +83,6 @@ required_value_missing_fails() {
     --set infisical.enabled=true --set infisical.projectId= 2>&1)" && return 1
   grep -q "projectId" <<<"$out"
 }
-check "rendering fails and names the missing required value" required_value_missing_fails
-
 # 4. 有効にした機能に必要な依存が指定されていない場合、レンダリングが失敗する
 #    (条件付き必須, 3.7/4.10)。ここでは退避先S3資格情報の自動発行を例にする。
 conditional_dependency_missing_fails() {
@@ -103,6 +97,56 @@ conditional_dependency_missing_fails() {
     --set infisical.enabled=true 2>&1)" && return 1
   grep -q "projectId" <<<"$out"
 }
-check "enabling a feature without its required dependency fails rendering" conditional_dependency_missing_fails
+# 5. ワーキングツリーに秘匿情報らしき文字列が紛れ込んでいない (git-secrets 相当の簡易検査)。
+# PEM 秘密鍵ヘッダと AWS アクセスキー ID は語として一意なため repo 全体を対象にできるが、
+# password/secret/token 等はソース中の識別子 (変数名・struct フィールド名) と大量に衝突するため、
+# 対象を設定ファイル (yaml/yml/json/env) に絞る。
+AWS_KEY_ALLOWLIST="AKIAIOSFODNN7EXAMPLE" # AWS 公式ドキュメントの例示アクセスキー (実キーではない)。
+# この検査自体のテスト用フィクスチャ (portability-check.test.sh) は、検知確認のため
+# 意図的に秘匿情報らしき文字列を埋め込んでいるので対象から除く。
+SELF_TEST_EXCLUDE="portability-check.test.sh"
+no_secrets_in_worktree() {
+  local hits
+  hits="$(grep -rInE --exclude-dir=.git --exclude="$SELF_TEST_EXCLUDE" \
+    -e '-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----' \
+    -e 'AKIA[0-9A-Z]{16}' \
+    "$CHART_DIR" 2>/dev/null | grep -v "$AWS_KEY_ALLOWLIST")"
+  if [[ -n "$hits" ]]; then
+    echo "  secret-like pattern found:" >&2
+    echo "$hits" >&2
+    return 1
+  fi
 
-exit $fail
+  local candidate value
+  while IFS= read -r candidate; do
+    [[ -z "$candidate" ]] && continue
+    value="${candidate##*[:=]}"
+    value="$(tr -d '[:space:]"'"'"'' <<<"$value")"
+    # Helm テンプレート式や、明らかなプレースホルダは実際の秘匿情報ではないため除外する。
+    case "$value" in
+      '' | '{{'* | [Cc]hange[Mm]e* | [Ee]xample* | [Xx][Xx][Xx]* | [Tt][Oo][Dd][Oo] | \
+      [Nn]ull | [Nn]one | [Rr]edacted* | [Dd]ummy* | [Rr]eplace*)
+        continue
+        ;;
+    esac
+    echo "  possible hardcoded credential: $candidate" >&2
+    return 1
+  # 注意: GNU grep は --include/--exclude を指定順で評価するため、--exclude を
+  # --include より先に書くと --include によるファイル種別の絞り込みが効かなくなる。
+  done < <(grep -rInE \
+    --include='*.yaml' --include='*.yml' --include='*.json' --include='*.env' \
+    --exclude-dir=.git --exclude="$SELF_TEST_EXCLUDE" \
+    -i '(password|passwd|secret|token|apikey|api_key)[[:space:]]*[:=][[:space:]]*[^[:space:]]+' \
+    "$CHART_DIR" 2>/dev/null)
+  return 0
+}
+# テストランナー (portability-check.test.sh) が関数だけを再利用できるよう、
+# source された場合はここから下の検査実行 (helm 呼び出しを伴う) と exit を走らせない。
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  check "minimal render succeeds and leaks no forbidden identifier" minimal_render_no_leak
+  check "render succeeds with all optional dependencies disabled" optional_deps_disabled
+  check "rendering fails and names the missing required value" required_value_missing_fails
+  check "enabling a feature without its required dependency fails rendering" conditional_dependency_missing_fails
+  check "no secret-like strings in worktree" no_secrets_in_worktree
+  exit $fail
+fi
