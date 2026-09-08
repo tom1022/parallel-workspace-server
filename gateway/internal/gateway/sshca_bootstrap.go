@@ -74,38 +74,7 @@ func (b *CABootstrap) Ensure(ctx context.Context) (*CertificateAuthority, error)
 }
 
 func (b *CABootstrap) ensurePrivateKey(ctx context.Context) ([]byte, error) {
-	existing, err := b.readSecretKey(ctx, b.Namespace, b.SecretName, b.KeyName)
-	if err != nil {
-		return nil, err
-	}
-	if len(existing) > 0 {
-		return existing, nil
-	}
-
-	generated, err := generateCAPrivateKey()
-	if err != nil {
-		return nil, err
-	}
-	secret := newSecretObject(b.Namespace, b.SecretName, map[string][]byte{b.KeyName: generated})
-	_, err = b.Dynamic.Resource(secretGVR).Namespace(b.Namespace).Create(ctx, secret, metav1.CreateOptions{})
-	switch {
-	case err == nil:
-		return generated, nil
-	case !apierrors.IsAlreadyExists(err):
-		return nil, fmt.Errorf("gateway: create SSH CA secret %s/%s: %w", b.Namespace, b.SecretName, err)
-	}
-
-	// Either another replica created it between the read and the write, or the
-	// Secret is there without the expected key. Both are answered by reading
-	// back: the first authority to land is the one everyone must sign with.
-	adopted, err := b.readSecretKey(ctx, b.Namespace, b.SecretName, b.KeyName)
-	if err != nil {
-		return nil, err
-	}
-	if len(adopted) == 0 {
-		return nil, fmt.Errorf("gateway: secret %s/%s exists but holds no %q", b.Namespace, b.SecretName, b.KeyName)
-	}
-	return adopted, nil
+	return ensureSecretKey(ctx, b.Dynamic, b.Namespace, b.SecretName, b.KeyName, generateCAPrivateKey)
 }
 
 func (b *CABootstrap) publishPublicKey(ctx context.Context, pub ssh.PublicKey) error {
@@ -140,7 +109,15 @@ func (b *CABootstrap) publishPublicKey(ctx context.Context, pub ssh.PublicKey) e
 // readSecretKey answers nil for both a missing Secret and a missing key: the
 // caller's next step is the same either way.
 func (b *CABootstrap) readSecretKey(ctx context.Context, namespace, name, key string) ([]byte, error) {
-	obj, err := b.Dynamic.Resource(secretGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	return readSecretKey(ctx, b.Dynamic, namespace, name, key)
+}
+
+// readSecretKey is the free-function form shared by every bootstrap that
+// keeps a single key in a single Secret (CABootstrap and IdentityBootstrap).
+// It answers nil for both a missing Secret and a missing key: the caller's
+// next step is the same either way.
+func readSecretKey(ctx context.Context, client dynamic.Interface, namespace, name, key string) ([]byte, error) {
+	obj, err := client.Resource(secretGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
@@ -156,6 +133,44 @@ func (b *CABootstrap) readSecretKey(ctx context.Context, namespace, name, key st
 		return nil, fmt.Errorf("gateway: secret %s/%s key %q is not base64: %w", namespace, name, key, err)
 	}
 	return decoded, nil
+}
+
+// ensureSecretKey returns the value already stored at namespace/name/key, or
+// generates one with generate and stores it if absent. Whatever already
+// exists wins: on a losing race against a concurrent creator, this reads
+// back and adopts the winner's value rather than retrying its own (the same
+// "create; on AlreadyExists, read back" idiom CABootstrap and
+// IdentityBootstrap both need for their respective key material).
+func ensureSecretKey(ctx context.Context, client dynamic.Interface, namespace, name, key string, generate func() ([]byte, error)) ([]byte, error) {
+	existing, err := readSecretKey(ctx, client, namespace, name, key)
+	if err != nil {
+		return nil, err
+	}
+	if len(existing) > 0 {
+		return existing, nil
+	}
+
+	generated, err := generate()
+	if err != nil {
+		return nil, err
+	}
+	secret := newSecretObject(namespace, name, map[string][]byte{key: generated})
+	_, err = client.Resource(secretGVR).Namespace(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	switch {
+	case err == nil:
+		return generated, nil
+	case !apierrors.IsAlreadyExists(err):
+		return nil, fmt.Errorf("gateway: create secret %s/%s: %w", namespace, name, err)
+	}
+
+	adopted, err := readSecretKey(ctx, client, namespace, name, key)
+	if err != nil {
+		return nil, err
+	}
+	if len(adopted) == 0 {
+		return nil, fmt.Errorf("gateway: secret %s/%s exists but holds no %q", namespace, name, key)
+	}
+	return adopted, nil
 }
 
 func generateCAPrivateKey() ([]byte, error) {
