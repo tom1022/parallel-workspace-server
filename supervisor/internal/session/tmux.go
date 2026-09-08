@@ -62,18 +62,34 @@ func (t *Tmux) Start(cfg StartConfig) error {
 	if t.HasSession() {
 		return nil
 	}
-	args := []string{"new-session", "-d", "-s", t.Session, "-c", cfg.WorkingDir}
+	// remain-on-exit must be in effect before the hosted command can exit, or a
+	// command that exits fast enough (e.g. a one-line failing script) tears the
+	// pane -- and with it the whole session, since tmux kills a server with no
+	// sessions left -- down before a later `set-option -t <session>` gets a
+	// chance to land. It has to be baked into the server at startup via a
+	// config file: `set-option -g` alone doesn't start the server the way
+	// new-session does, and starting the server first via a throwaway session
+	// just moves the same race there instead.
+	conf, err := os.CreateTemp("", "devplatform-tmux-*.conf")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(conf.Name())
+	_, werr := conf.WriteString("set-option -g remain-on-exit on\n")
+	cerr := conf.Close()
+	if werr != nil {
+		return werr
+	}
+	if cerr != nil {
+		return cerr
+	}
+
+	args := []string{"-f", conf.Name(), "new-session", "-d", "-s", t.Session, "-c", cfg.WorkingDir}
 	for _, e := range cfg.Env {
 		args = append(args, "-e", e)
 	}
 	args = append(args, cfg.Command...)
 	if _, err := t.run(args...); err != nil {
-		return err
-	}
-	// remain-on-exit keeps the pane (and its contents) after the hosted process
-	// dies, which is both how the crash is observable at all and how the last
-	// screen survives for the operator to read.
-	if _, err := t.run("set-option", "-t", t.Session, "remain-on-exit", "on"); err != nil {
 		return err
 	}
 	if cfg.HistoryLimit > 0 {

@@ -50,18 +50,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: supervisor/go.mod
-      - name: DEBUG tmux
-        run: |
-          tmux -V
-          id
-          echo "TMPDIR=$TMPDIR"
-          tmux -L debugsock new-session -d -s x 'sleep 5'
-          echo "new-session exit=$?"
-          sleep 1
-          tmux -L debugsock has-session -t x
-          echo "has-session exit=$?"
-          tmux -L debugsock list-sessions || true
-          ls -la /tmp/tmux-$(id -u)/ || true
       - run: go test ./...
 
   chart-lint:
