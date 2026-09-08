@@ -50,6 +50,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: supervisor/go.mod
+      - name: DEBUG script/pty attach
+        run: |
+          which script && script --version || true
+          tmux -L dbg new-session -d -s w -c /tmp sh -c 'cat > /tmp/typed.txt'
+          script -q -c "tmux -L dbg attach -t w -r" /dev/null &
+          SPID=$!
+          sleep 2
+          echo "script pid alive?"; kill -0 $SPID && echo yes || echo no
+          tmux -L dbg list-clients -t w -F '#{client_name}|#{client_readonly}|#{client_created}' || echo "list-clients failed: $?"
+          kill $SPID 2>/dev/null || true
+          tmux -L dbg kill-server || true
       - run: go test ./...
 
   chart-lint:
