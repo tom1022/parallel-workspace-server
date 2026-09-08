@@ -89,7 +89,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # cr upload は gh-pages を origin/gh-pages 参照で解決するが、actions/checkout の
+      # 既定は現在の ref だけを浅く取得するため、他ブランチの参照は存在しない。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Configure git identity for gh-pages publish
         run: |
           git config user.name "github-actions[bot]"
