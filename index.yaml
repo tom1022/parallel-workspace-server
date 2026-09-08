@@ -2,6 +2,18 @@ apiVersion: v1
 entries:
   devplatform:
   - apiVersion: v2
+    appVersion: v0.1.7
+    created: "2026-09-08T13:56:18.006265701Z"
+    description: Autonomous parallel dev platform control plane and shared terminal
+      gateway
+    digest: f17b6894e9e0eda90ce96cd3e5c2a4385b3ef0564941e1a6643df17a8979ecef
+    kubeVersion: '>=1.31.0-0'
+    name: devplatform
+    type: application
+    urls:
+    - https://github.com/tom1022/parallel-workspace-server/releases/download/devplatform-0.1.7/devplatform-0.1.7.tgz
+    version: 0.1.7
+  - apiVersion: v2
     appVersion: v0.1.6
     created: "2026-09-08T13:44:10.693669341Z"
     description: Autonomous parallel dev platform control plane and shared terminal
@@ -61,4 +73,4 @@ entries:
     urls:
     - https://github.com/tom1022/parallel-workspace-server/releases/download/devplatform-0.1.2/devplatform-0.1.2.tgz
     version: 0.1.2
-generated: "2026-09-08T13:44:10.693699405Z"
+generated: "2026-09-08T13:56:18.006293362Z"
