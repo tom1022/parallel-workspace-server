@@ -73,6 +73,12 @@ spec:
             - name: DATABASE_TYPE
               value: "none"
             {{- end }}
+            # Workspace が対象にできないリポジトリ・ブランチ (5.5/5.6)。空の間は
+            # 何も拒まない。
+            - name: GIT_CREDENTIAL_PROTECTED_REPOSITORIES
+              value: {{ join "," (.Values.gitCredential.protectedRepositories | default (list)) | quote }}
+            - name: GIT_CREDENTIAL_PROTECTED_BRANCHES
+              value: {{ join "," (.Values.gitCredential.protectedBranches | default (list)) | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

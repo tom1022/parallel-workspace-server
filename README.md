@@ -41,6 +41,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | ブランチ専用データベース (PostgreSQL 系。CloudNativePG 等) | ワークスペースごとの作業用 DB | 任意 (既定 `workspaceTemplate.database.enabled: true`)。使う場合はこの chart には含まれず、利用者側で用意し `workspaceTemplate.database.clusterRef` で参照する。`enabled: false` にするとワークスペースはデータベースなしで払い出される |
 | S3 互換オブジェクトストレージ (Garage 等) | 作業内容の退避先 | 必須。既定 (`evacuationCredentials.autoProvision.enabled: true`) はクラスタ内 Garage 前提で資格情報を自動発行する。外部 S3 を使う場合は無効化して自分で用意する |
 | Tailscale operator 等の VPN | 統合開発環境からの任意経路 | 任意。`subnetRouterNamespace` を設定した場合のみ経路が開く |
+| Git ホスティング (ホスティングの種類は問わない) | Workspace が対象とするリポジトリへの到達 | 必須。基盤はホスティングの種類を前提としない (5.1)。資格情報の到達範囲を対象リポジトリのみに限定する設定は、この基盤ではなく利用者側の Git ホスティング設定の責務 (5.8) |
 
 将来のリリースでは、ルーティング実装の差し替え・秘匿情報同期の必須撤廃・
 基盤自身によるローカル認証など、上表の一部を任意化する予定である。現時点の
@@ -104,6 +105,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 | `routing.exposure.annotations`/`middlewareRefs` | プレビュー/レポートの入口へ透過的に載せる注釈と中間処理参照。基盤は内容を解釈しない | `{}` / `[]` (何も載せない) | 省略可。`middlewareRefs` は `routing.type: traefik` のときだけ意味を持つ |
 | `routing.workspaceMiddlewares`/`apiMiddlewares` | Traefik IngressRoute に付与する中間処理の完全修飾名 | `[]` (付与しない) | 省略可 |
 | `routing.ingressNamespace`/`ingressPodSelector` | ルーティング実装がワークスペースへ到達するための NetworkPolicy 許可元 | `kube-system` / `app.kubernetes.io/name: traefik` (Traefik 同梱の k3s を既定と仮定) | 省略可。空にするとこの経路を許可しない |
+| `gitCredential.protectedRepositories`/`protectedBranches` | Workspace が対象にできないリポジトリ・ブランチ (5.5/5.6)。資格情報の出どころ (利用者提供・自動発行いずれも) にかかわらず払い出しを拒む | `[]` / `[]` (何も拒まない) | 省略可。この chart 自身を配備している GitOps リポジトリを `protectedRepositories` に列挙することを推奨 |
 | `workspaceNamespace` | Workspace/WorkspaceTemplate を置くネームスペース | `devplatform-workspaces` | **必須** |
 | `createWorkspaceNamespace` | `workspaceNamespace` という名前の Namespace リソースを生成するか (3.5/3.6) | `true` | 省略可。`false` にする場合、運用者が同名の Namespace を配備前に用意する |
 | `subnetRouterNamespace` | VPN 等、任意経路の subnet router が居るネームスペース | `""` (経路を開かない) | 省略可 |
@@ -190,6 +192,16 @@ Prune=false,Delete=false` を付け、一律の prune/selfHeal から守って�
   併せて `workspaceTemplate.evacuation.bucket`/`endpoint`/`region` を配備先に合わせる。
 - **データベース**: 利用するデータベースオペレータ側の設定で、生成される
   superuser Secret を指定の Secret に差し替える。
+- **Git 資格情報**: Workspace 作成時に `spec.gitCredentialSecretRef` で、対象
+  リポジトリへの資格情報を保持する Secret 名 (同一 namespace 内) を指定する。
+  これが既定経路であり、ホスティングの種類は問わない。未指定の場合のみ、
+  基盤に `GitCredentialIssuer` (自動発行の拡張点。既定では未構成) が
+  設定されていればそれを使う — どちらも無ければ払い出しは失敗する。
+  資格情報の到達範囲を対象リポジトリだけに限定する設定は、利用者側の Git
+  ホスティング設定 (デプロイキーのスコープ、fine-grained token 等) で行う
+  (5.8)。`gitCredential.protectedRepositories`/`protectedBranches` に列挙した
+  リポジトリ・ブランチは、資格情報の出どころにかかわらず払い出しが拒まれる
+  (5.5, 5.6)。
 
 ## 動作確認 (portability check)
 

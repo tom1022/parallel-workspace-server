@@ -65,6 +65,10 @@ spec:
                   type: string
                   description: 参照する WorkspaceTemplate の名前。
                   minLength: 1
+                gitCredentialSecretRef:
+                  type: string
+                  description: repository 用に利用者が用意した Git 資格情報を保持する、同一 namespace 内 Secret の名前 (5.1-5.4)。
+                  nullable: true
                 desiredPhase:
                   type: string
                   description: 開発者/Hermes Agent が要求する目標状態。中断は Suspended への変更で要求する (13.1-13.4)。

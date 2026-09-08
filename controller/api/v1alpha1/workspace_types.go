@@ -45,6 +45,13 @@ type WorkspaceSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	TemplateRef string `json:"templateRef"`
 
+	// GitCredentialSecretRef names a Secret, in this Workspace's namespace,
+	// holding the Git credential the caller prepared for Repository (5.1-5.4).
+	// When unset, the controller falls back to its configured
+	// GitCredentialIssuer, if any.
+	// +optional
+	GitCredentialSecretRef *string `json:"gitCredentialSecretRef,omitempty"`
+
 	// DesiredPhase is the caller-requested target state. Suspend is requested by
 	// switching this to Suspended (13.1-13.4).
 	// +kubebuilder:validation:Enum=Ready;Suspended

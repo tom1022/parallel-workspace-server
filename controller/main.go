@@ -57,6 +57,7 @@ func main() {
 
 	routingAdapter, routingDomain, routingExposure := buildRoutingAdapter(log, mgr.GetClient(), mgr.GetScheme())
 	databaseAdapter := buildDatabaseAdapter(log, mgr.GetClient(), mgr.GetScheme())
+	gitCredentialGuard := buildGitCredentialGuard()
 
 	if err := (&controller.WorkspaceReconciler{
 		Client: mgr.GetClient(),
@@ -88,6 +89,9 @@ func main() {
 		// DatabaseAdapter provisions the branch-dedicated database (task
 		// 3.4); see buildDatabaseAdapter.
 		DatabaseAdapter: databaseAdapter,
+		// GitCredentialGuard names what no Workspace may target regardless of
+		// credential source (task 5.1); see buildGitCredentialGuard.
+		GitCredentialGuard: gitCredentialGuard,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create Workspace controller")
 		os.Exit(1)
@@ -192,6 +196,17 @@ func buildDatabaseAdapter(log logr.Logger, c client.Client, scheme *runtime.Sche
 		log.Error(nil, `DATABASE_TYPE must be "cnpg" or "none"`, "value", databaseType)
 		os.Exit(1)
 		return nil
+	}
+}
+
+// buildGitCredentialGuard reads the deployment's declared off-limits
+// repositories/branches (task 5.1, Requirements 5.5/5.6). Both env vars are
+// plain configuration; leaving them unset protects nothing rather than
+// falling back to a built-in name.
+func buildGitCredentialGuard() controller.GitCredentialGuard {
+	return controller.GitCredentialGuard{
+		ProtectedRepositories: splitList(os.Getenv("GIT_CREDENTIAL_PROTECTED_REPOSITORIES")),
+		ProtectedBranches:     splitList(os.Getenv("GIT_CREDENTIAL_PROTECTED_BRANCHES")),
 	}
 }
 

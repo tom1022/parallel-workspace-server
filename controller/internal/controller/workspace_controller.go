@@ -57,10 +57,16 @@ type WorkspaceReconciler struct {
 	// Now overrides time.Now for elapsed-time checks; tests may fake it.
 	Now func() time.Time
 
-	// GitCredentialIssuer issues the repository-scoped Git credential each
-	// workspace connects to its remote with (task 2.4). No default: a nil
-	// value fails provisioning explicitly rather than silently skipping
-	// credential issuance.
+	// GitCredentialGuard names repositories/branches no Workspace may target,
+	// regardless of which mechanism supplies the credential (5.5, 5.6). Its
+	// zero value protects nothing; a deployment declares its own limits via
+	// values (main.go).
+	GitCredentialGuard GitCredentialGuard
+
+	// GitCredentialIssuer is the optional auto-issuance extension point used
+	// only when a Workspace has no Spec.GitCredentialSecretRef (5.4). A nil
+	// value combined with no caller-provided reference fails provisioning
+	// explicitly rather than silently skipping credential issuance.
 	GitCredentialIssuer GitCredentialIssuer
 
 	// NodeReader reads Node objects directly against the API server instead

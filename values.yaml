@@ -117,6 +117,14 @@ routing:
   ingressPodSelector:
     app.kubernetes.io/name: traefik
 
+# Workspace が対象にできないリポジトリ・ブランチ (5.5/5.6)。資格情報の出どころ
+# (利用者提供の参照でも自動発行でも) にかかわらずこの一覧に対する払い出しを拒む。
+# 空リストの間は何も拒まない — 既定では、この chart 自身を配備している GitOps
+# リポジトリを protectedRepositories に列挙することを推奨する。
+gitCredential:
+  protectedRepositories: []
+  protectedBranches: []
+
 # ワークスペース専用ネームスペース名。Workspace / WorkspaceTemplate はここに置く。
 # workspace-namespace.yaml (後続タスク) と controller-rbac.yaml のスコープもここを参照する。
 # apps/devplatform 自体のリリース先ネームスペース (devplatform) とは別にする。

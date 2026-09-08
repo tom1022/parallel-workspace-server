@@ -418,42 +418,34 @@ func TestIsolationWorkspaceOperatorIsDeniedOutsideItsScope(t *testing.T) {
 	}
 }
 
-// TestIsolationGitCredentialRefusesDefaultBranchPush covers 14.13: a workspace
-// whose working branch is the repository's default branch would otherwise be
-// handed a credential permitted to push there.
+// TestIsolationGitCredentialRefusesDefaultBranchPush covers 5.6: a workspace
+// whose working branch is one the deployment declared protected (typically
+// the repository's default branch) would otherwise be handed a credential
+// permitted to push there.
 func TestIsolationGitCredentialRefusesDefaultBranchPush(t *testing.T) {
 	ctx := context.Background()
 	ns := newNamespace(t)
-	repo := "https://gitea.fickledev.com/tom1022/demo.git"
+	repo := "https://git.example.com/acme/demo.git"
+	guard := GitCredentialGuard{ProtectedBranches: []string{"main", "master"}}
 
-	for i, tc := range []struct {
-		branch     string
-		baseBranch string
-	}{
-		{branch: "main"},
-		{branch: "master"},
-		{branch: "Main"},
-		{branch: "release/1.0", baseBranch: "release/1.0"},
-	} {
+	for i, branch := range []string{"main", "master", "Main"} {
 		name := fmt.Sprintf("ws-defbranch-%d", i)
-		ws := createWorkspace(t, ctx, ns, name, repo, tc.branch, "default")
-		if tc.baseBranch != "" {
-			ws.Spec.BaseBranch = &tc.baseBranch
-		}
+		ws := createWorkspace(t, ctx, ns, name, repo, branch, "default")
 
 		fake := &fakeGitCredentialIssuer{}
 		r := newTestReconciler()
 		r.GitCredentialIssuer = fake
+		r.GitCredentialGuard = guard
 
 		if err := r.reconcileGitCredential(ctx, ws, name); err == nil {
-			t.Errorf("reconcileGitCredential(branch=%q, base=%q) = nil, want a refusal", tc.branch, tc.baseBranch)
+			t.Errorf("reconcileGitCredential(branch=%q) = nil, want a refusal", branch)
 		}
 		if len(fake.requests) != 0 {
-			t.Errorf("branch %q reached the issuer; no credential may be requested for a default branch", tc.branch)
+			t.Errorf("branch %q reached the issuer; no credential may be requested for a protected branch", branch)
 		}
 		var secret corev1.Secret
 		if err := testClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &secret); !apierrors.IsNotFound(err) {
-			t.Errorf("branch %q left a credential Secret behind (err=%v)", tc.branch, err)
+			t.Errorf("branch %q left a credential Secret behind (err=%v)", branch, err)
 		}
 	}
 
@@ -463,6 +455,7 @@ func TestIsolationGitCredentialRefusesDefaultBranchPush(t *testing.T) {
 	fake := &fakeGitCredentialIssuer{}
 	r := newTestReconciler()
 	r.GitCredentialIssuer = fake
+	r.GitCredentialGuard = guard
 	if err := r.reconcileGitCredential(ctx, ws, "ws-defbranch-ok"); err != nil {
 		t.Fatalf("a working branch forked from the default branch must still be issued: %v", err)
 	}

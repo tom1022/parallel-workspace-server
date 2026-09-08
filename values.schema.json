@@ -61,6 +61,21 @@
         }
       }
     },
+    "gitCredential": {
+      "type": "object",
+      "properties": {
+        "protectedRepositories": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Workspace が対象にできないリポジトリ (5.5)。空の間は何も拒まない。"
+        },
+        "protectedBranches": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Workspace が対象にできないブランチ名 (5.6)。空の間は何も拒まない。"
+        }
+      }
+    },
     "workspaceNamespace": {
       "type": "string",
       "minLength": 1,
