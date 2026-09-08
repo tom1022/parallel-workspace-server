@@ -135,9 +135,10 @@ no_secrets_in_worktree() {
     [[ -z "$candidate" ]] && continue
     value="${candidate##*[:=]}"
     value="$(tr -d '[:space:]"'"'"'' <<<"$value")"
-    # Helm テンプレート式や、明らかなプレースホルダは実際の秘匿情報ではないため除外する。
+    # Helm テンプレート式 ({{ ... }}) や GitHub Actions 式 (${{ ... }}) 、
+    # 明らかなプレースホルダは実際の秘匿情報ではないため除外する。
     case "$value" in
-      '' | '{{'* | [Cc]hange[Mm]e* | [Ee]xample* | [Xx][Xx][Xx]* | [Tt][Oo][Dd][Oo] | \
+      '' | '{{'* | '${{'* | [Cc]hange[Mm]e* | [Ee]xample* | [Xx][Xx][Xx]* | [Tt][Oo][Dd][Oo] | \
       [Nn]ull | [Nn]one | [Rr]edacted* | [Dd]ummy* | [Rr]eplace*)
         continue
         ;;

@@ -67,6 +67,18 @@ EOF
 assert "placeholder/template-expression values are not flagged" pass no_secrets_in_worktree
 rm -f "$placeholder_file"
 
+# GitHub Actions の式構文 (${{ secrets.XXX }}) はべた書きの秘匿値ではない
+# (.github/workflows/release.yml:27 相当の再現ケース)。
+workflow_expr_file="$(mktemp "$CHART_DIR/hack/testdata/tmp-workflow-XXXXXX.yaml")"
+cat >"$workflow_expr_file" <<'EOF'
+steps:
+  - uses: docker/login-action@v3
+    with:
+      password: ${{ secrets.GITHUB_TOKEN }}
+EOF
+assert "GitHub Actions secrets expression is not flagged" pass no_secrets_in_worktree
+rm -f "$workflow_expr_file"
+
 echo
 echo "$tests_run tests, $tests_failed failed"
 exit $((tests_failed > 0))
