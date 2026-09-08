@@ -12,4 +12,8 @@ metadata:
   name: {{ .Values.workspaceNamespace }}
   labels:
     app.kubernetes.io/part-of: devplatform
+  annotations:
+    # controller-pvc.yaml と同じ理由 (要件 17.5)。この namespace が prune されると
+    # 配下の Workspace 実体・永続データがまとめて失われる。
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 {{- end }}
