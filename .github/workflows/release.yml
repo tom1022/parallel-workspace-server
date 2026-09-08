@@ -109,6 +109,28 @@ jobs:
             https://github.com/helm/chart-releaser/releases/download/v1.7.0/chart-releaser_1.7.0_linux_amd64.tar.gz
           tar -xzf /tmp/cr.tar.gz -C /tmp cr
           install -m 0755 /tmp/cr /usr/local/bin/cr
+      # Chart.yaml の version は Helm が SemVer2 を要求し "v" 接頭辞を許さないため tag から
+      # 剥がす。appVersion は利用者がイメージ tag と対応付けられるよう "v" 付きのまま残す。
+      - name: Set chart version from release tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version:.*/version: ${version}/" Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"${GITHUB_REF_NAME}\"/" Chart.yaml
+      # values.yaml の既定イメージ参照を、直前の3ジョブが実際に push した不変参照 (digest) に
+      # 揃える。これを chart のパッケージングより前に行うことで、公開される chart は常に
+      # 「タグ = chart 版 = 同梱イメージ参照」が一致した状態になる (要件 1.2, 6.3)。
+      - name: Point chart to published image references
+        env:
+          CONTROLLER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/devplatform-controller
+          CONTROLLER_TAG: ${{ github.ref_name }}
+          CONTROLLER_DIGEST: ${{ needs.build-controller-image.outputs.digest }}
+          GATEWAY_REPOSITORY: ghcr.io/${{ github.repository_owner }}/devplatform-gateway
+          GATEWAY_TAG: ${{ github.ref_name }}
+          GATEWAY_DIGEST: ${{ needs.build-gateway-image.outputs.digest }}
+          WORKSPACE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/devplatform-workspace
+          WORKSPACE_TAG: ${{ github.ref_name }}
+          WORKSPACE_DIGEST: ${{ needs.build-workspace-image.outputs.digest }}
+        run: bash hack/update-image-refs.sh values.yaml
       - name: Package chart
         run: cr package . --package-path .cr-release-packages
       - name: Upload chart package to GitHub Releases

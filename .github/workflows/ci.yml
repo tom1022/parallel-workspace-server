@@ -69,3 +69,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash hack/portability-check.test.sh
       - run: bash hack/portability-check.sh
+      - run: bash hack/update-image-refs.test.sh
