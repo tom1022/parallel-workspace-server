@@ -40,6 +40,12 @@ type Handler struct {
 	// the caller is responsible for keeping the two consistent when local
 	// authentication is stopped (4.9).
 	Local *LocalAuth
+	// Version, MinClientVersion, and MaxClientVersion answer GET /version
+	// (11.4). Empty means "unset" — a client that gets no constraint back is
+	// expected to hold off judging compatibility rather than refuse to work.
+	Version          string
+	MinClientVersion string
+	MaxClientVersion string
 	// PollInterval overrides DefaultPollInterval.
 	PollInterval time.Duration
 	// HTTPClient talks to the Session Supervisor. Nil means http.DefaultClient.

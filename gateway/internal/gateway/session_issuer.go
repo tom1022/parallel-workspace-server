@@ -17,9 +17,9 @@ const DefaultSessionTTL = time.Hour
 // every identification mechanism the gateway holds (external IdP or its own
 // User Store).
 type Subject struct {
-	ID     string
-	Name   string
-	Source string
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Source string `json:"source,omitempty"`
 }
 
 // SessionIssuer mints and verifies the gateway's own sessions.
