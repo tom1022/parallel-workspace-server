@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,37 +48,50 @@ func isolationIntChartValue(t *testing.T, key string) string {
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		if v, ok := strings.CutPrefix(line, key+": "); ok {
-			return strings.TrimSpace(v)
+			// values.yaml quotes some empty defaults (e.g. `""`); an unquoted
+			// caller-side compare against "" must see the unquoted value.
+			return strings.Trim(strings.TrimSpace(v), `"'`)
 		}
 	}
 	t.Fatalf("values.yaml has no top-level %q", key)
 	return ""
 }
 
-// isolationIntRender substitutes the chart placeholders the isolation manifests
-// use, so the tests assert on the manifest this repository actually ships
-// instead of a copy. Any placeholder this renderer does not know about fails
-// the test rather than reaching the parser as literal text.
+// isolationIntRender shells out to the real `helm template`, so the tests
+// assert on the manifest this repository actually ships instead of a
+// hand-maintained copy. A prior version of this helper reimplemented template
+// substitution with literal string replacement; every `with`/`if` block the
+// chart added (routing.ingressNamespace, database.namespace,
+// objectStorage.namespace, ...) required a matching special case, and each
+// one left the previous set stale. Real rendering has no such maintenance
+// class of bug. Only gateway.domain/tls.secretName are overridden — both are
+// required by values.schema.json but irrelevant to isolation — everything
+// else renders off the chart's shipped defaults, matching what
+// isolationIntChartValue reads out of values.yaml for the assertions below.
 func isolationIntRender(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "templates", name))
-	if err != nil {
-		t.Fatalf("read %s: %v", name, err)
+	chartDir := filepath.Join("..", "..", "..")
+	cmd := exec.Command("helm", "template", "devplatform", chartDir,
+		"--namespace", isolationIntReleaseNS,
+		"--set", "gateway.domain=example.internal",
+		"--set", "gateway.tls.secretName=example-gateway-tls",
+		// network.excludeCIDRs has no portable default (2.4: different clusters
+		// use different Pod/Service ranges), so the chart ships it empty. This
+		// reference deployment's real overlay sets it to isolationIntClusterCIDRs;
+		// without that override here, the external egress ipBlock would legitimately
+		// (per the chart's own contract) cover the cluster's own ranges, and the
+		// isolation assertions below would be checking an unconfigured deployment
+		// rather than the one this repository actually runs.
+		"--set", "network.excludeCIDRs={"+strings.Join(isolationIntClusterCIDRs, ",")+"}",
+		"--show-only", "templates/"+name,
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("helm template %s: %v\n%s", name, err, stderr.String())
 	}
-	out := strings.NewReplacer(
-		"{{ .Release.Namespace }}", isolationIntReleaseNS,
-		"{{ .Values.workspaceNamespace }}", isolationIntChartValue(t, "workspaceNamespace"),
-		"{{ .Values.subnetRouterNamespace }}", isolationIntChartValue(t, "subnetRouterNamespace"),
-		// controller.clusterNodeAccess.enabled defaults to true (values.yaml);
-		// this suite only exercises the shipped default, so the guard is
-		// dropped rather than evaluated.
-		"{{- if .Values.controller.clusterNodeAccess.enabled }}\n", "",
-		"{{- end }}\n", "",
-	).Replace(string(b))
-	if strings.Contains(out, "{{") {
-		t.Fatalf("%s contains a template directive this test cannot render; the substitutions are stale", name)
-	}
-	return []byte(out)
+	return stdout.Bytes()
 }
 
 func isolationIntNetworkPolicy(t *testing.T) *networkingv1.NetworkPolicy {
@@ -204,9 +219,14 @@ func TestIsolationNetworkPolicyLimitsCrossNamespaceReach(t *testing.T) {
 	np := isolationIntNetworkPolicy(t)
 
 	wantIngress := map[string]map[string]bool{
-		isolationIntReleaseNS:                              {"TCP/8787": true},
-		isolationIntChartValue(t, "subnetRouterNamespace"): {"TCP/22": true},
-		isolationIntTraefikNS:                              isolationIntPreviewReportPorts(),
+		isolationIntReleaseNS: {"TCP/8787": true},
+		isolationIntTraefikNS: isolationIntPreviewReportPorts(),
+	}
+	// subnetRouterNamespace defaults to "" (2.4): the template's `with` drops
+	// the port-22 rule entirely rather than emit a rule for an empty
+	// namespace, so only assert it when a namespace is actually configured.
+	if ns := isolationIntChartValue(t, "subnetRouterNamespace"); ns != "" {
+		wantIngress[ns] = map[string]bool{"TCP/22": true}
 	}
 	wantEgress := map[string]map[string]bool{
 		"devplatform-db": {"TCP/5432": true},
