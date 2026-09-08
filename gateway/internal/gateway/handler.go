@@ -20,15 +20,26 @@ import (
 // the result into the stream a browser terminal expects.
 const DefaultPollInterval = 200 * time.Millisecond
 
-// Handler serves both faces of the gateway: the browser terminal, reached at a
-// workspace's own hostname behind the existing forward auth chain, and the
-// /api/ control surface, which the gateway authorizes itself.
+// Handler serves both faces of the gateway: the browser terminal and the
+// /api/ control surface. Every route the gateway exposes is identified by
+// Identity before it reaches application logic (4.1); Verifier's own
+// RequireBearer stays as the external-IdP building block Identity wraps
+// (IDPAuthenticator), not as a second gate.
 type Handler struct {
 	Store    *Store
 	Verifier *Verifier
+	// Identity identifies the caller behind every request this Handler
+	// serves. A Handler with a nil or empty Identity refuses every request
+	// (4.1's invariant: no route may fall back to being unprotected).
+	Identity *Identity
 	// CA may be nil while the Infisical-synced signing key is absent; only
 	// certificate issuance degrades.
 	CA *CertificateAuthority
+	// Local wires the self-hosted login/password/version endpoints. Nil
+	// disables them (503) without touching Identity's authenticator list —
+	// the caller is responsible for keeping the two consistent when local
+	// authentication is stopped (4.9).
+	Local *LocalAuth
 	// PollInterval overrides DefaultPollInterval.
 	PollInterval time.Duration
 	// HTTPClient talks to the Session Supervisor. Nil means http.DefaultClient.
@@ -45,10 +56,19 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("GET /version", h.version)
 
 	mux.HandleFunc("GET /{$}", h.serveTerminal)
 	mux.HandleFunc("GET /ws", h.serveSessionSocket)
-	mux.HandleFunc("POST /handover", h.handover)
+	mux.Handle("POST /handover", h.Identity.Require(http.HandlerFunc(h.handover)))
+
+	// /auth/login issues a session, so it cannot require one; every other
+	// /auth/ route needs an identified caller (400/503 vs. 401 is decided
+	// inside each handler, per the API contract's error columns).
+	mux.HandleFunc("POST /auth/login", h.login)
+	mux.Handle("POST /auth/logout", h.Identity.Require(http.HandlerFunc(h.logout)))
+	mux.Handle("GET /auth/me", h.Identity.Require(http.HandlerFunc(h.me)))
+	mux.Handle("POST /auth/password", h.Identity.Require(http.HandlerFunc(h.changePassword)))
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/workspaces", h.listWorkspaces)
@@ -56,7 +76,7 @@ func (h *Handler) Routes() http.Handler {
 	api.HandleFunc("DELETE /api/workspaces/{id}", h.deleteWorkspace)
 	api.HandleFunc("GET /api/workspaces/{id}/session", h.sessionStatus)
 	api.HandleFunc("POST /api/ssh/certificate", h.issueCertificate)
-	mux.Handle("/api/", h.Verifier.RequireBearer(api))
+	mux.Handle("/api/", h.Identity.Require(api))
 
 	return mux
 }
@@ -75,7 +95,21 @@ func (h *Handler) pollInterval() time.Duration {
 	return DefaultPollInterval
 }
 
+// serveTerminal never asks the Store anything before it knows who is
+// asking: a plain browser navigation cannot carry the Authorization header
+// PresentedToken reads, so most loads of this page arrive unidentified, and
+// the response for those has to be the same regardless of which workspace
+// hostname it came in on — resolving the host first and discarding the
+// result would still leave that hostname's existence and identity to time
+// (4.1's "基盤の情報を一切返さない").
 func (h *Handler) serveTerminal(w http.ResponseWriter, r *http.Request) {
+	if _, err := h.Identity.Identify(r.Context(), r); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(signInPage))
+		return
+	}
+
 	ws, err := h.Store.ResolveHost(r.Context(), r.Host)
 	if err != nil {
 		writeStoreError(w, err)
@@ -90,7 +124,18 @@ func (h *Handler) serveTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// serveSessionSocket identifies the caller before the handshake is even
+// hijacked: the credential rides the Sec-WebSocket-Protocol negotiation
+// (PresentedToken), so it is already on the request by the time this runs,
+// and an unidentified request never reaches websocket.Handler at all — no
+// connection is established for it (4.1).
 func (h *Handler) serveSessionSocket(w http.ResponseWriter, r *http.Request) {
+	if _, err := h.Identity.Identify(r.Context(), r); err != nil {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="devplatform-gateway"`)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
 	ws, err := h.Store.ResolveHost(r.Context(), r.Host)
 	if err != nil {
 		writeStoreError(w, err)
@@ -333,6 +378,20 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 	}
 }
+
+// signInPage is what an unidentified GET /{$} gets instead of the terminal:
+// no workspace name, branch, or any other detail of what this hostname
+// serves (4.1). It carries no workspace-specific content, so it is a plain
+// constant rather than a template.
+const signInPage = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sign in required</title></head>
+<body>
+<p>Authentication required. Obtain a session (POST /auth/login or your
+configured identity provider) and present it as a Bearer credential.</p>
+</body>
+</html>
+`
 
 var terminalPage = template.Must(template.New("terminal").Parse(`<!doctype html>
 <html lang="en">

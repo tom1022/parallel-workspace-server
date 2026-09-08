@@ -14,8 +14,10 @@ import (
 )
 
 // dialSession opens the browser socket the way the terminal page does: at the
-// workspace's hostname, carrying the session identifier /handover names.
-func dialSession(t *testing.T, server *httptest.Server, host, sessionID string) *websocket.Conn {
+// workspace's hostname, carrying the session identifier /handover names and
+// presenting token the way a browser has to at handshake time — as a
+// WebSocket sub-protocol, since it cannot set a custom header here (4.1).
+func dialSession(t *testing.T, server *httptest.Server, host, sessionID, token string) *websocket.Conn {
 	t.Helper()
 	target := "ws://" + host + "/ws"
 	if sessionID != "" {
@@ -25,6 +27,7 @@ func dialSession(t *testing.T, server *httptest.Server, host, sessionID string) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	config.Protocol = []string{"bearer." + token}
 	dialer, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "http://"))
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +68,7 @@ func TestSessionSocketIsReadOnlyUntilHandover(t *testing.T) {
 	server := httptest.NewServer(rig.handler)
 	defer server.Close()
 
-	conn := dialSession(t, server, "feature-login.fickledev.com", "s-1")
+	conn := dialSession(t, server, "feature-login.fickledev.com", "s-1", rig.token)
 	if _, err := conn.Write([]byte("rm -rf /\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +77,7 @@ func TestSessionSocketIsReadOnlyUntilHandover(t *testing.T) {
 		t.Fatalf("read-only connection drove the session: %q", sent)
 	}
 
-	rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-1"}`, withHost("feature-login.fickledev.com"))
+	rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-1"}`, withHost("feature-login.fickledev.com"), rig.authorized())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("handover status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -94,13 +97,13 @@ func TestHandoverRefusedWhileAnotherBrowserHoldsTheSession(t *testing.T) {
 	server := httptest.NewServer(rig.handler)
 	defer server.Close()
 
-	dialSession(t, server, "feature-login.fickledev.com", "s-1")
-	dialSession(t, server, "feature-login.fickledev.com", "s-2")
+	dialSession(t, server, "feature-login.fickledev.com", "s-1", rig.token)
+	dialSession(t, server, "feature-login.fickledev.com", "s-2", rig.token)
 
-	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-1"}`, withHost("feature-login.fickledev.com")); rec.Code != http.StatusOK {
+	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-1"}`, withHost("feature-login.fickledev.com"), rig.authorized()); rec.Code != http.StatusOK {
 		t.Fatalf("first handover status = %d, want 200", rec.Code)
 	}
-	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-2"}`, withHost("feature-login.fickledev.com")); rec.Code != http.StatusConflict {
+	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-2"}`, withHost("feature-login.fickledev.com"), rig.authorized()); rec.Code != http.StatusConflict {
 		t.Fatalf("second handover status = %d, want 409", rec.Code)
 	}
 }
@@ -113,18 +116,18 @@ func TestHandoverRefusedWhileAWritableSessionClientIsAttached(t *testing.T) {
 	server := httptest.NewServer(rig.handler)
 	defer server.Close()
 
-	dialSession(t, server, "feature-login.fickledev.com", "s-1")
-	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-1"}`, withHost("feature-login.fickledev.com")); rec.Code != http.StatusConflict {
+	dialSession(t, server, "feature-login.fickledev.com", "s-1", rig.token)
+	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-1"}`, withHost("feature-login.fickledev.com"), rig.authorized()); rec.Code != http.StatusConflict {
 		t.Fatalf("handover status = %d, want 409", rec.Code)
 	}
 }
 
 func TestHandoverRejectsUnknownSessionAndHost(t *testing.T) {
 	rig := newTestRig(t, testWorkspace("feature-login", "feature/login", "feature-login", "Ready"))
-	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"nope"}`, withHost("feature-login.fickledev.com")); rec.Code != http.StatusNotFound {
+	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"nope"}`, withHost("feature-login.fickledev.com"), rig.authorized()); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown session status = %d, want 404", rec.Code)
 	}
-	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-1"}`, withHost("absent.fickledev.com")); rec.Code != http.StatusNotFound {
+	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-1"}`, withHost("absent.fickledev.com"), rig.authorized()); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown host status = %d, want 404", rec.Code)
 	}
 }
@@ -136,7 +139,7 @@ func TestConnectAndDisconnectAreReportedToTheController(t *testing.T) {
 	server := httptest.NewServer(rig.handler)
 	defer server.Close()
 
-	conn := dialSession(t, server, "feature-login.fickledev.com", "s-1")
+	conn := dialSession(t, server, "feature-login.fickledev.com", "s-1", rig.token)
 	waitForBrowserConnections(t, rig, "1")
 
 	conn.Close()

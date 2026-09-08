@@ -165,8 +165,9 @@ func newTestRig(t *testing.T, objs ...runtime.Object) *testRig {
 	store := newTestStore(t, append(objs, runningPod("feature-login", host))...)
 	store.SupervisorPort = supervisorPort
 
+	identity := &Identity{Authenticators: []Authenticator{&IDPAuthenticator{Verifier: verifier}}}
 	return &testRig{
-		handler:    (&Handler{Store: store, Verifier: verifier, CA: ca, PollInterval: 10 * time.Millisecond}).Routes(),
+		handler:    (&Handler{Store: store, Verifier: verifier, Identity: identity, CA: ca, PollInterval: 10 * time.Millisecond}).Routes(),
 		token:      signToken(t, key, validClaims()),
 		supervisor: supervisor,
 		store:      store,
@@ -200,7 +201,7 @@ func withHost(host string) func(*http.Request) {
 func TestBrowserRootServesTerminalForResolvedHost(t *testing.T) {
 	rig := newTestRig(t, testWorkspace("feature-login", "feature/login", "feature-login", "Ready"))
 
-	rec := rig.do(t, http.MethodGet, "/", "", withHost("feature-login.fickledev.com"))
+	rec := rig.do(t, http.MethodGet, "/", "", withHost("feature-login.fickledev.com"), rig.authorized())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -211,8 +212,28 @@ func TestBrowserRootServesTerminalForResolvedHost(t *testing.T) {
 
 func TestBrowserRootRejectsUnknownHost(t *testing.T) {
 	rig := newTestRig(t, testWorkspace("feature-login", "feature/login", "feature-login", "Ready"))
-	if rec := rig.do(t, http.MethodGet, "/", "", withHost("nope.fickledev.com")); rec.Code != http.StatusNotFound {
+	if rec := rig.do(t, http.MethodGet, "/", "", withHost("nope.fickledev.com"), rig.authorized()); rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// 4.1: an unidentified request never reaches the Store, so it cannot learn
+// anything about a hostname it does not hold a session for — including
+// whether that hostname resolves to anything at all.
+func TestBrowserRootRequiresIdentificationBeforeRevealingAnything(t *testing.T) {
+	rig := newTestRig(t, testWorkspace("feature-login", "feature/login", "feature-login", "Ready"))
+
+	rec := rig.do(t, http.MethodGet, "/", "", withHost("feature-login.fickledev.com"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "feature-login") || strings.Contains(rec.Body.String(), "feature/login") {
+		t.Fatalf("unidentified request leaked workspace info: %s", rec.Body.String())
+	}
+
+	unknown := rig.do(t, http.MethodGet, "/", "", withHost("nope.fickledev.com"))
+	if unknown.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown host status = %d, want 401 (never resolved)", unknown.Code)
 	}
 }
 
@@ -346,7 +367,8 @@ func TestIssueSSHCertificateWithoutCA(t *testing.T) {
 	// Replace the handler with one whose CA never synced.
 	verifier, key := newTestVerifier(t)
 	store := newTestStore(t, testWorkspace("feature-login", "feature/login", "feature-login", "Ready"))
-	handler := (&Handler{Store: store, Verifier: verifier}).Routes()
+	identity := &Identity{Authenticators: []Authenticator{&IDPAuthenticator{Verifier: verifier}}}
+	handler := (&Handler{Store: store, Verifier: verifier, Identity: identity}).Routes()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ssh/certificate",
 		strings.NewReader(`{"workspaceId":"feature-login","publicKey":`+strconv.Quote(newUserKey(t))+`}`))
@@ -371,6 +393,9 @@ func TestSessionSocketBridgesBothDirections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The credential rides the WebSocket sub-protocol negotiation, the only
+	// presentation channel available at handshake time (4.1).
+	config.Protocol = []string{"bearer." + rig.token}
 	dialer, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "http://"))
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +417,7 @@ func TestSessionSocketBridgesBothDirections(t *testing.T) {
 	}
 
 	// Input only flows once this connection holds the session read-write (3.4).
-	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-bridge"}`, withHost("feature-login.fickledev.com")); rec.Code != http.StatusOK {
+	if rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-bridge"}`, withHost("feature-login.fickledev.com"), rig.authorized()); rec.Code != http.StatusOK {
 		t.Fatalf("handover status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	if _, err := conn.Write([]byte("ls\n")); err != nil {
@@ -403,8 +428,17 @@ func TestSessionSocketBridgesBothDirections(t *testing.T) {
 
 func TestSessionSocketRejectsUnknownHost(t *testing.T) {
 	rig := newTestRig(t)
-	rec := rig.do(t, http.MethodGet, "/ws", "", withHost("nope.fickledev.com"))
+	rec := rig.do(t, http.MethodGet, "/ws", "", withHost("nope.fickledev.com"), rig.authorized())
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// 4.1: /ws never even reaches the handshake for an unidentified caller.
+func TestSessionSocketRefusesConnectionWithoutIdentification(t *testing.T) {
+	rig := newTestRig(t, testWorkspace("feature-login", "feature/login", "feature-login", "Ready"))
+	rec := rig.do(t, http.MethodGet, "/ws", "", withHost("feature-login.fickledev.com"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }

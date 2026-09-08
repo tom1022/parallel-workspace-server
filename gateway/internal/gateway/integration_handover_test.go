@@ -78,7 +78,7 @@ func ihWaitForAgentResumed(t *testing.T, rig *testRig, text string) {
 
 func ihTakeOver(t *testing.T, rig *testRig, sessionID string) {
 	t.Helper()
-	rec := rig.do(t, http.MethodPost, "/handover", fmt.Sprintf(`{"sessionId":%q}`, sessionID), withHost("feature-login.fickledev.com"))
+	rec := rig.do(t, http.MethodPost, "/handover", fmt.Sprintf(`{"sessionId":%q}`, sessionID), withHost("feature-login.fickledev.com"), rig.authorized())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("handover status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -98,7 +98,7 @@ func TestBrowserTakeoverStopsAgentInputAndReleaseResumesIt(t *testing.T) {
 		t.Fatalf("agent input before takeover = %d, want 204", status)
 	}
 
-	conn := dialSession(t, server, "feature-login.fickledev.com", "s-1")
+	conn := dialSession(t, server, "feature-login.fickledev.com", "s-1", rig.token)
 	if _, err := conn.Write([]byte("watching\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestRepeatedInterruptAndResumeNeverCollides(t *testing.T) {
 		want = append(want, agentBefore)
 
 		sessionID := fmt.Sprintf("s-%d", round)
-		conn := dialSession(t, server, "feature-login.fickledev.com", sessionID)
+		conn := dialSession(t, server, "feature-login.fickledev.com", sessionID, rig.token)
 		ihTakeOver(t, rig, sessionID)
 
 		if status := ihAgentInput(t, rig, "agent-must-not-land"); status != http.StatusConflict {
@@ -185,11 +185,11 @@ func TestTakeoverRefusalLeavesTheHolderDriving(t *testing.T) {
 	server := httptest.NewServer(rig.handler)
 	defer server.Close()
 
-	first := dialSession(t, server, "feature-login.fickledev.com", "s-1")
-	second := dialSession(t, server, "feature-login.fickledev.com", "s-2")
+	first := dialSession(t, server, "feature-login.fickledev.com", "s-1", rig.token)
+	second := dialSession(t, server, "feature-login.fickledev.com", "s-2", rig.token)
 	ihTakeOver(t, rig, "s-1")
 
-	rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-2"}`, withHost("feature-login.fickledev.com"))
+	rec := rig.do(t, http.MethodPost, "/handover", `{"sessionId":"s-2"}`, withHost("feature-login.fickledev.com"), rig.authorized())
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("second handover status = %d, want 409", rec.Code)
 	}
