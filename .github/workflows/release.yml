@@ -155,6 +155,9 @@ jobs:
         run: |
           owner="${GITHUB_REPOSITORY%%/*}"
           repo="${GITHUB_REPOSITORY#*/}"
+          # cr index はデフォルトの .cr-index/index.yaml へアトミック書き込みするが、
+          # ディレクトリ自体は作らないため事前に用意する。
+          mkdir -p .cr-index
           cr index \
             --owner "$owner" \
             --git-repo "$repo" \
