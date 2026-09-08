@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-controller:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: controller
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: controller/go.mod
+      - name: Install setup-envtest
+        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+      # controller のテストは実 API サーバ (envtest) を必要とするが、そのバイナリは
+      # ランナーに存在しないため毎回取得し、パスを KUBEBUILDER_ASSETS として後続ステップに渡す。
+      - name: Fetch envtest Kubernetes 1.31 binaries
+        run: echo "KUBEBUILDER_ASSETS=$(setup-envtest use 1.31.x --bin-dir "${RUNNER_TEMP}/envtest" -p path)" >> "$GITHUB_ENV"
+      - run: go test ./...
+
+  test-gateway:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+      - run: go test ./...
+
+  test-supervisor:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supervisor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: supervisor/go.mod
+      - run: go test ./...
+
+  chart-lint:
+    runs-on: ubuntu-latest
+    # Go テストのいずれかが失敗した場合にチャートの問題調査へ進ませないための順序付け。
+    needs: [test-controller, test-gateway, test-supervisor]
+    steps:
+      - uses: actions/checkout@v4
+      # values.yaml は利用者が埋める前提の必須値を空文字列のまま置いているため、
+      # 素の helm lint は values.schema.json の検証で必ず失敗する。
+      - run: helm lint . -f hack/testdata/minimal-values.yaml
