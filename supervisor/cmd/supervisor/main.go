@@ -23,7 +23,6 @@ import (
 
 const (
 	defaultMountRoot = "/workspace"
-	defaultAuthFile  = "/run/devplatform/claude-auth/credentials.json"
 	defaultAddr      = ":8787"
 	tmuxSocket       = "devplatform"
 	tmuxSession      = "workspace"
@@ -221,7 +220,6 @@ func serve() error {
 	workingDir := env("WORKSPACE_DIR", defaultWorkingDir)
 	configDir := env("CLAUDE_CONFIG_DIR", defaultConfigDir)
 	cacheDir := env("WORKSPACE_CACHE_DIR", defaultCacheDir)
-	authFile := env("CLAUDE_AUTH_FILE", defaultAuthFile)
 	workspace := env("WORKSPACE_NAME", "")
 	hermesURL := env("HERMES_NOTIFY_URL", "")
 	addr := env("SUPERVISOR_ADDR", defaultAddr)
@@ -241,7 +239,7 @@ func serve() error {
 	}
 	defer release()
 
-	if err := session.PrepareConfigDir(configDir, workingDir, authFile); err != nil {
+	if err := session.PrepareConfigDir(configDir, workingDir); err != nil {
 		return err
 	}
 
@@ -260,6 +258,7 @@ func serve() error {
 		OutputLog:      filepath.Join(configDir, "session-output.log"),
 		WorkingDir:     workingDir,
 		ClaudeMDSource: os.Getenv("BLACKBOARD_CLAUDE_MD"),
+		LongLivedAuth:  os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "",
 	}
 
 	health := &session.Health{ConfigDir: configDir}

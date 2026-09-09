@@ -145,7 +145,7 @@ Kubernetes クラスタへこの基盤を配備し、Web ターミナル (また
 
 | Secret 名 (既定経路) / Infisical のキー (Infisical 経路) | 中身 | 必須 |
 |---|---|---|
-| `workspaceTemplate.auth.secretRef` の Secret (`credentials.json`) / `DEVPLATFORM_WORKSPACE_CLAUDE_CODE_CREDENTIALS` | Claude Code の長期認証情報 (`credentials.json` の内容そのまま) | 必須 |
+| `workspaceTemplate.auth.secretRef` の Secret (`token`) / `DEVPLATFORM_WORKSPACE_CLAUDE_CODE_TOKEN` | Claude Code の長期認証情報。`claude setup-token` が発行するトークンをそのまま値にする (CLAUDE_CODE_OAUTH_TOKEN 環境変数として Pod に渡る) | 必須 |
 | `infisical.inferenceCredentialsSecretName` の Secret (`api-key`) / `DEVPLATFORM_INFERENCE_API_KEY` | 推論バックエンドの API キー (Claude Code のサブスクリプション認証とは別系統) | 必須 |
 | `gateway.ssh.caSecretName` の Secret / `DEVPLATFORM_SSH_CA_PRIVATE_KEY` | 自前の SSH 認証局を持ち込む場合の秘密鍵 | `infisical.sshCa.enabled: true` の場合のみ Infisical 経路が使える。既定経路では常にこの Secret 自体が必須 (クラスタ内発行で自動的に満たされる) |
 | `workspaceTemplate.evacuation.secretRef` の Secret (`access-key`/`secret-key`) / `DEVPLATFORM_EVACUATION_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | 外部 S3 を退避先にする場合の資格情報 | `infisical.evacuation.enabled: true` の場合のみ Infisical 経路が使える |

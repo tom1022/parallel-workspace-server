@@ -3,7 +3,6 @@ package session
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -27,28 +26,21 @@ var nonSubscriptionAuthVars = []string{
 }
 
 // PrepareConfigDir makes the per-workspace config area usable without any
-// interactive first-run confirmation (2.8). authFile, when set, is the
-// long-lived credential mounted from the Secret; it is copied in rather than
-// symlinked so Claude Code can rewrite it on refresh.
-func PrepareConfigDir(configDir, workingDir, authFile string) error {
+// interactive first-run confirmation (2.8). The long-lived credential itself
+// arrives as the CLAUDE_CODE_OAUTH_TOKEN env var (5.1) rather than a file
+// here: Claude Code reads that directly, so there is nothing to install.
+func PrepareConfigDir(configDir, workingDir string) error {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return err
 	}
-	// MkdirAll leaves an existing directory's mode alone, and the config area
-	// holds the credential.
+	// MkdirAll leaves an existing directory's mode alone.
 	if err := os.Chmod(configDir, 0o700); err != nil {
 		return err
 	}
 	if err := seedGlobalState(configDir, workingDir); err != nil {
 		return err
 	}
-	if err := seedSettings(configDir); err != nil {
-		return err
-	}
-	if authFile == "" {
-		return nil
-	}
-	return installCredential(configDir, authFile)
+	return seedSettings(configDir)
 }
 
 // seedGlobalState marks the first-run dialogs answered. It merges into any
@@ -92,15 +84,6 @@ func seedGlobalState(configDir, workingDir string) error {
 // workspaces (7.13), and the config area outlives the container.
 func seedSettings(configDir string) error {
 	return EnforcePromptIsolation(configDir)
-}
-
-func installCredential(configDir, authFile string) error {
-	b, err := os.ReadFile(authFile)
-	if err != nil {
-		return fmt.Errorf("supervisor: read credential %s: %w", authFile, err)
-	}
-	// 0600 is set explicitly because the Secret mount is world-readable.
-	return os.WriteFile(filepath.Join(configDir, credentialFile), b, 0o600)
 }
 
 func writeJSON(path string, v any) error {

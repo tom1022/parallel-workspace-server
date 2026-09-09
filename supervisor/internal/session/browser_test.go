@@ -1,8 +1,6 @@
 package session
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -35,9 +33,7 @@ func TestReadOnlyObserverCannotDriveTheirBrowser(t *testing.T) {
 
 func TestLongLivedCredentialDisablesInteractiveBrowserVerification(t *testing.T) {
 	s := newTestSupervisor(t)
-	if err := os.WriteFile(filepath.Join(s.ConfigDir, credentialFile), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	s.LongLivedAuth = true
 	stop := attachClient(t, s.Tmux, false)
 	defer stop()
 	waitForClients(t, s.Tmux, 1)
@@ -56,9 +52,7 @@ func TestLongLivedCredentialDisablesInteractiveBrowserVerification(t *testing.T)
 // reason for the loop to stop (9.12).
 func TestSelfHealingLoopRunsToCompletionWithoutInteractiveBrowserVerification(t *testing.T) {
 	s := newTestSupervisor(t)
-	if err := os.WriteFile(filepath.Join(s.ConfigDir, credentialFile), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	s.LongLivedAuth = true
 
 	const attempts = 3
 	completed := 0

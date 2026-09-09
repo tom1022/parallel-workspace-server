@@ -1,13 +1,5 @@
 package session
 
-import (
-	"os"
-	"path/filepath"
-)
-
-// credentialFile is Claude Code's stored credential inside CLAUDE_CONFIG_DIR.
-const credentialFile = ".credentials.json"
-
 // BrowserVerification is whether the session can drive the developer's own
 // browser right now. It carries no error: an unavailable result is an ordinary
 // answer, so a caller cannot mistake the absence of this capability for a
@@ -27,7 +19,7 @@ type BrowserVerification struct {
 // platform starts every workspace, so this is normally unavailable and the
 // autonomous loop must not lean on it.
 func (s *Supervisor) InteractiveBrowserVerification() BrowserVerification {
-	if _, err := os.Stat(filepath.Join(s.ConfigDir, credentialFile)); err == nil {
+	if s.LongLivedAuth {
 		return BrowserVerification{Reason: "session authenticated with a long-lived credential"}
 	}
 	clients, err := s.Tmux.ListClients()

@@ -26,17 +26,14 @@ const (
 	workingDirPath = workspaceMountPath + "/repo"
 
 	// claudeConfigPath keeps Claude Code's config area on the per-workspace PVC
-	// so it stays independent per workspace and survives restarts (5.3),
-	// distinct from the read-only mounted long-lived credential in
-	// authMountPath. cacheDirPath is the package cache the supervisor points
-	// every package manager at, so a suspend/resume does not re-download
-	// (15.12). Both mirror session.Paths in the supervisor module.
+	// so it stays independent per workspace and survives restarts (5.3).
+	// cacheDirPath is the package cache the supervisor points every package
+	// manager at, so a suspend/resume does not re-download (15.12). Both
+	// mirror session.Paths in the supervisor module.
 	claudeConfigPath = workspaceMountPath + "/.claude-config"
 	cacheDirPath     = workspaceMountPath + "/.cache"
 
-	authMountPath        = "/run/devplatform/claude-auth"
-	authSecretVolumeName = "claude-auth"
-	workspaceVolumeName  = "workspace"
+	workspaceVolumeName = "workspace"
 
 	// The Blackboard's CLAUDE.md, delivered as a mount so the supervisor
 	// decides when it reaches the session rather than kubelet doing (10.6).
@@ -75,6 +72,12 @@ const (
 	// Key names inside the evacuation destination's credential Secret.
 	evacuationAccessKeyKey = "access-key"
 	evacuationSecretKeyKey = "secret-key"
+
+	// Key inside spec.auth.secretRef holding the long-lived Claude Code
+	// credential. Delivered as CLAUDE_CODE_OAUTH_TOKEN (an env var, not a
+	// mounted file): Claude Code reads it directly and never rewrites it, so
+	// there is no refreshed-file-on-disk problem to solve (5.1).
+	authTokenKey = "token"
 
 	// The branch role's TLS client certificate, which CNPG issues into
 	// "<databaserole-name>-client-cert" (database_reconciler.go). Mounting it
@@ -221,7 +224,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 	workspaceEnv := append([]corev1.EnvVar{
 		{Name: "WORKSPACE_MOUNT", Value: workspaceMountPath},
 		{Name: "WORKSPACE_NAME", Value: ws.Name},
-		{Name: "CLAUDE_AUTH_FILE", Value: authMountPath + "/credentials.json"},
+		secretEnv("CLAUDE_CODE_OAUTH_TOKEN", tmpl.Spec.Auth.SecretRef, authTokenKey),
 		{Name: "SSH_CA_PUBLIC_KEY", Value: sshCAMountPath + "/" + sshCAPublicKeyKey},
 		{Name: "BLACKBOARD_CLAUDE_MD", Value: blackboardMountPath + "/" + ClaudeMDKey},
 	}, evacuationEnv...)
@@ -250,12 +253,6 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 			},
 		},
 		{
-			Name: authSecretVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: tmpl.Spec.Auth.SecretRef},
-			},
-		},
-		{
 			Name: sshCAVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
@@ -281,7 +278,6 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 	}
 	volumeMounts := []corev1.VolumeMount{
 		{Name: workspaceVolumeName, MountPath: workspaceMountPath},
-		{Name: authSecretVolumeName, MountPath: authMountPath, ReadOnly: true},
 		{Name: sshCAVolumeName, MountPath: sshCAMountPath, ReadOnly: true},
 		{Name: blackboardVolumeName, MountPath: blackboardMountPath, ReadOnly: true},
 	}

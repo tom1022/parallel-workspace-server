@@ -65,7 +65,7 @@ func TestPlatformStateDoesNotDirtyTheCheckout(t *testing.T) {
 		}
 	}
 
-	if err := PrepareConfigDir(configDir, workingDir, ""); err != nil {
+	if err := PrepareConfigDir(configDir, workingDir); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(configDir, "session-output.log"), []byte("output"), 0o600); err != nil {

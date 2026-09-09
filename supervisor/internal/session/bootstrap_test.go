@@ -26,7 +26,7 @@ func TestPrepareConfigDirPreAcceptsInteractivePrompts(t *testing.T) {
 	configDir := filepath.Join(dir, "config")
 	workDir := filepath.Join(dir, "workspace")
 
-	if err := PrepareConfigDir(configDir, workDir, ""); err != nil {
+	if err := PrepareConfigDir(configDir, workDir); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -49,7 +49,7 @@ func TestPrepareConfigDirPreAcceptsInteractivePrompts(t *testing.T) {
 
 func TestPrepareConfigDirIsPrivate(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "config")
-	if err := PrepareConfigDir(configDir, "/workspace", ""); err != nil {
+	if err := PrepareConfigDir(configDir, "/workspace"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	info, err := os.Stat(configDir)
@@ -72,7 +72,7 @@ func TestPrepareConfigDirKeepsExistingState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := PrepareConfigDir(configDir, "/workspace", ""); err != nil {
+	if err := PrepareConfigDir(configDir, "/workspace"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -86,35 +86,6 @@ func TestPrepareConfigDirKeepsExistingState(t *testing.T) {
 	}
 	if project["hasTrustDialogAccepted"] != true {
 		t.Error("trust must still be applied on top of existing state")
-	}
-}
-
-func TestPrepareConfigDirInstallsCredentialPrivately(t *testing.T) {
-	dir := t.TempDir()
-	configDir := filepath.Join(dir, "config")
-	authFile := filepath.Join(dir, "credentials.json")
-	if err := os.WriteFile(authFile, []byte(`{"token":"secret"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := PrepareConfigDir(configDir, "/workspace", authFile); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	installed := filepath.Join(configDir, ".credentials.json")
-	b, err := os.ReadFile(installed)
-	if err != nil {
-		t.Fatalf("credential not installed: %v", err)
-	}
-	if string(b) != `{"token":"secret"}` {
-		t.Errorf("credential content = %q", b)
-	}
-	info, err := os.Stat(installed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("credential mode = %o, want 600 regardless of the source mode", perm)
 	}
 }
 

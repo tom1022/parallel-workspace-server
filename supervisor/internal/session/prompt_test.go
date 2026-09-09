@@ -11,10 +11,10 @@ import (
 func TestCanonicalSettingsAreIdenticalAcrossWorkspaces(t *testing.T) {
 	a := filepath.Join(t.TempDir(), "config")
 	b := filepath.Join(t.TempDir(), "config")
-	if err := PrepareConfigDir(a, "/workspace/repo", ""); err != nil {
+	if err := PrepareConfigDir(a, "/workspace/repo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := PrepareConfigDir(b, "/workspace/repo", ""); err != nil {
+	if err := PrepareConfigDir(b, "/workspace/repo"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -35,7 +35,7 @@ func TestCanonicalSettingsAreIdenticalAcrossWorkspaces(t *testing.T) {
 // across workspaces, so the file is restored rather than merely seeded.
 func TestEnforcePromptIsolationRestoresDriftedSettings(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "config")
-	if err := PrepareConfigDir(configDir, "/workspace/repo", ""); err != nil {
+	if err := PrepareConfigDir(configDir, "/workspace/repo"); err != nil {
 		t.Fatal(err)
 	}
 	canonical, err := os.ReadFile(filepath.Join(configDir, "settings.json"))
@@ -83,7 +83,7 @@ func TestEnforcePromptIsolationDropsPersonalInstructions(t *testing.T) {
 
 func TestCanonicalSettingsCarryNoWorkspaceIdentity(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "config")
-	if err := PrepareConfigDir(configDir, "/workspace/repo", ""); err != nil {
+	if err := PrepareConfigDir(configDir, "/workspace/repo"); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(configDir, "settings.json"))

@@ -62,6 +62,12 @@ type Supervisor struct {
 	ClaudeMDSource string
 	// SSHPort is the port SSHEndpoint listens on; zero means DefaultSSHPort.
 	SSHPort int
+	// LongLivedAuth is whether Claude Code was started with the platform's
+	// own non-interactive credential (CLAUDE_CODE_OAUTH_TOKEN) rather than an
+	// interactive login. Claude Code disables the browser integration on such
+	// a session, so InteractiveBrowserVerification reads this instead of
+	// probing a credential file on disk (9.11).
+	LongLivedAuth bool
 
 	mu      sync.RWMutex
 	failure string

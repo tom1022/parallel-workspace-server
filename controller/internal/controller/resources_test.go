@@ -52,8 +52,10 @@ func TestBuildStatefulSet_WorkspaceRunsSessionSupervisor(t *testing.T) {
 	}
 
 	env := map[string]string{}
+	envFrom := map[string]*corev1.EnvVarSource{}
 	for _, e := range c.Env {
 		env[e.Name] = e.Value
+		envFrom[e.Name] = e.ValueFrom
 	}
 	if env["WORKSPACE_MOUNT"] != workspaceMountPath {
 		t.Errorf("WORKSPACE_MOUNT = %q, want %q", env["WORKSPACE_MOUNT"], workspaceMountPath)
@@ -61,9 +63,12 @@ func TestBuildStatefulSet_WorkspaceRunsSessionSupervisor(t *testing.T) {
 	if env["WORKSPACE_NAME"] != ws.Name {
 		t.Errorf("WORKSPACE_NAME = %q, want %q", env["WORKSPACE_NAME"], ws.Name)
 	}
-	// 5.2: the credential comes from the read-only Secret mount.
-	if env["CLAUDE_AUTH_FILE"] != authMountPath+"/credentials.json" {
-		t.Errorf("CLAUDE_AUTH_FILE = %q", env["CLAUDE_AUTH_FILE"])
+	// 5.1/5.2: the long-lived credential arrives as an env var sourced from
+	// the auth Secret, not a mounted file.
+	tokenSrc := envFrom["CLAUDE_CODE_OAUTH_TOKEN"]
+	if tokenSrc == nil || tokenSrc.SecretKeyRef == nil ||
+		tokenSrc.SecretKeyRef.Name != tmpl.Spec.Auth.SecretRef || tokenSrc.SecretKeyRef.Key != authTokenKey {
+		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN valueFrom = %+v, want secretKeyRef{name: %q, key: %q}", tokenSrc, tmpl.Spec.Auth.SecretRef, authTokenKey)
 	}
 
 	// 4.11: the principal the workspace's sshd accepts is its own identifier,
