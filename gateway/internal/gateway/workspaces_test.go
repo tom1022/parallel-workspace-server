@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -96,6 +97,48 @@ func TestCreateDerivesNameFromBranchAndRejectsDuplicates(t *testing.T) {
 
 	if _, err := store.Create(context.Background(), req); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("second Create error = %v, want ErrAlreadyExists", err)
+	}
+}
+
+func TestCreateSetsGitCredentialSecretRefWhenProvided(t *testing.T) {
+	store := newTestStore(t)
+	req := CreateWorkspaceRequest{
+		Repository:             "https://gitea.example.com/tochi/portfolio.git",
+		Branch:                 "feature/login",
+		GitCredentialSecretRef: "my-git-creds",
+	}
+
+	if _, err := store.Create(context.Background(), req); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	obj, err := store.Dynamic.Resource(workspaceGVR).Namespace(store.Namespace).Get(context.Background(), "feature-login", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got, found, err := unstructured.NestedString(obj.Object, "spec", "gitCredentialSecretRef")
+	if err != nil {
+		t.Fatalf("NestedString: %v", err)
+	}
+	if !found || got != "my-git-creds" {
+		t.Fatalf("spec.gitCredentialSecretRef = %q, found=%v, want %q", got, found, "my-git-creds")
+	}
+}
+
+func TestCreateOmitsGitCredentialSecretRefWhenNotProvided(t *testing.T) {
+	store := newTestStore(t)
+	req := CreateWorkspaceRequest{Repository: "https://gitea.example.com/tochi/portfolio.git", Branch: "feature/login"}
+
+	if _, err := store.Create(context.Background(), req); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	obj, err := store.Dynamic.Resource(workspaceGVR).Namespace(store.Namespace).Get(context.Background(), "feature-login", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, found, _ := unstructured.NestedString(obj.Object, "spec", "gitCredentialSecretRef"); found {
+		t.Fatal("spec.gitCredentialSecretRef should be unset when the request omits it")
 	}
 }
 

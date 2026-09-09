@@ -69,10 +69,11 @@ type WorkspaceSummary struct {
 
 // CreateWorkspaceRequest is the body of POST /api/workspaces.
 type CreateWorkspaceRequest struct {
-	Repository  string `json:"repository"`
-	Branch      string `json:"branch"`
-	BaseBranch  string `json:"baseBranch,omitempty"`
-	TemplateRef string `json:"templateRef,omitempty"`
+	Repository             string `json:"repository"`
+	Branch                 string `json:"branch"`
+	BaseBranch             string `json:"baseBranch,omitempty"`
+	TemplateRef            string `json:"templateRef,omitempty"`
+	GitCredentialSecretRef string `json:"gitCredentialSecretRef,omitempty"`
 }
 
 // Store is the gateway's only state access. Everything it answers comes from the
@@ -165,6 +166,9 @@ func (s *Store) Create(ctx context.Context, req CreateWorkspaceRequest) (Workspa
 	}
 	if req.BaseBranch != "" {
 		spec["baseBranch"] = req.BaseBranch
+	}
+	if req.GitCredentialSecretRef != "" {
+		spec["gitCredentialSecretRef"] = req.GitCredentialSecretRef
 	}
 
 	obj := &unstructured.Unstructured{Object: map[string]any{
