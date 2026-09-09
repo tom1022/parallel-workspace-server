@@ -569,3 +569,92 @@ func TestBuildStatefulSet_TrustsTheAuthorityKeySuppliedAtRuntime(t *testing.T) {
 		t.Errorf("volumes = %+v, want the certificate authority key volume", sts.Spec.Template.Spec.Volumes)
 	}
 }
+
+// A user-provided git credential must actually reach the Pod that clones and
+// later pushes/pulls, not just be verified to exist (git_credential_reconciler.go).
+func TestBuildStatefulSet_InjectsUserProvidedGitCredentialAsEnv(t *testing.T) {
+	ws, tmpl := supervisorTestWorkspace()
+	ws.Spec.GitCredentialSecretRef = ptr("my-git-creds")
+
+	sts, err := buildStatefulSet(ws, tmpl, "feature-supervisor")
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+
+	checkEnv := func(t *testing.T, env []corev1.EnvVar) {
+		t.Helper()
+		byName := map[string]corev1.EnvVar{}
+		for _, e := range env {
+			byName[e.Name] = e
+		}
+
+		tok, ok := byName["GIT_CREDENTIAL_TOKEN"]
+		if !ok {
+			t.Fatal("GIT_CREDENTIAL_TOKEN missing from env")
+		}
+		if src := tok.ValueFrom; src == nil || src.SecretKeyRef == nil {
+			t.Fatalf("GIT_CREDENTIAL_TOKEN must come from a Secret, not a literal value")
+		} else {
+			if src.SecretKeyRef.Name != "my-git-creds" {
+				t.Errorf("GIT_CREDENTIAL_TOKEN secret = %q, want %q", src.SecretKeyRef.Name, "my-git-creds")
+			}
+			if src.SecretKeyRef.Key != "token" {
+				t.Errorf("GIT_CREDENTIAL_TOKEN key = %q, want %q", src.SecretKeyRef.Key, "token")
+			}
+		}
+		if tok.Value != "" {
+			t.Errorf("GIT_CREDENTIAL_TOKEN carries a literal credential value")
+		}
+
+		askpass, ok := byName["GIT_ASKPASS"]
+		if !ok {
+			t.Fatal("GIT_ASKPASS missing from env")
+		}
+		if askpass.Value == "" {
+			t.Errorf("GIT_ASKPASS has no path")
+		}
+	}
+
+	t.Run("init container", func(t *testing.T) {
+		checkEnv(t, sts.Spec.Template.Spec.InitContainers[0].Env)
+	})
+	t.Run("workspace container", func(t *testing.T) {
+		checkEnv(t, sts.Spec.Template.Spec.Containers[0].Env)
+	})
+}
+
+// The common case has no spec.gitCredentialSecretRef (public repos, or ones
+// relying on a GitCredentialIssuer) and must stay exactly as it was before
+// credential injection existed: an unset GIT_ASKPASS would break the
+// anonymous clone that currently works.
+func TestBuildStatefulSet_NoGitCredentialRefLeavesGitEnvUnset(t *testing.T) {
+	ws, tmpl := supervisorTestWorkspace()
+
+	sts, err := buildStatefulSet(ws, tmpl, "feature-supervisor")
+	if err != nil {
+		t.Fatalf("buildStatefulSet: %v", err)
+	}
+
+	checkAbsent := func(t *testing.T, env []corev1.EnvVar) {
+		t.Helper()
+		for _, e := range env {
+			if e.Name == "GIT_CREDENTIAL_TOKEN" || e.Name == "GIT_ASKPASS" {
+				t.Errorf("env %s = %+v, want it absent without spec.gitCredentialSecretRef", e.Name, e)
+			}
+		}
+	}
+
+	checkAbsent(t, sts.Spec.Template.Spec.InitContainers[0].Env)
+	checkAbsent(t, sts.Spec.Template.Spec.Containers[0].Env)
+}
+
+// Lightweight guard against someone deleting the credential-writing shell
+// block, mirroring the other workspaceInitScript checks in this file.
+func TestWorkspaceInitScript_WritesGitAskpassFromCredentialToken(t *testing.T) {
+	if !strings.Contains(workspaceInitScript, "$GIT_CREDENTIAL_TOKEN") {
+		t.Error("the init script never references $GIT_CREDENTIAL_TOKEN")
+	}
+	if !strings.Contains(workspaceInitScript, "$GIT_ASKPASS") {
+		t.Error("the init script never writes to $GIT_ASKPASS")
+	}
+}

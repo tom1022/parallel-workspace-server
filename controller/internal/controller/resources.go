@@ -79,6 +79,18 @@ const (
 	// there is no refreshed-file-on-disk problem to solve (5.1).
 	authTokenKey = "token"
 
+	// Key inside spec.gitCredentialSecretRef holding the git HTTPS token.
+	// Delivered as GIT_CREDENTIAL_TOKEN (an env var), same rationale as
+	// authTokenKey: git only ever needs it via GIT_ASKPASS, so there is no
+	// file on disk that gets rewritten and needs re-mounting.
+	gitCredentialTokenKey = "token"
+
+	// gitAskpassPath is where the init script writes the askpass helper.
+	// It sits on the workspace PVC but outside workingDirPath for the same
+	// reason documented on workingDirPath: nothing under the git checkout
+	// may hold a credential a `git add -A` could pick up.
+	gitAskpassPath = workspaceMountPath + "/.git-askpass"
+
 	// The branch role's TLS client certificate, which CNPG issues into
 	// "<databaserole-name>-client-cert" (database_reconciler.go). Mounting it
 	// also gates the Pod on the role actually existing, which is the trigger
@@ -162,6 +174,12 @@ func parseResourceList(rl devplatformv1alpha1.ResourceList) (corev1.ResourceList
 // replay a second time on its own, so the two guards agree.
 const workspaceInitScript = `set -eu
 mkdir -p "$WORKSPACE_DIR" "$CLAUDE_CONFIG_DIR" "$WORKSPACE_CACHE_DIR"
+# ponytail: HTTPS token auth only, no SSH remote support — lift this ceiling
+# only once a user actually needs an SSH git remote.
+if [ -n "${GIT_CREDENTIAL_TOKEN:-}" ]; then
+  printf '#!/bin/sh\necho "$GIT_CREDENTIAL_TOKEN"\n' > "$GIT_ASKPASS"
+  chmod +x "$GIT_ASKPASS"
+fi
 rm -f "$WORKSPACE_DIR/.git/index.lock" "$WORKSPACE_DIR/.git/HEAD.lock" "$WORKSPACE_DIR/.git/shallow.lock"
 if [ ! -d "$WORKSPACE_DIR/.git" ]; then
   if git ls-remote --exit-code --heads "$WORKSPACE_REPOSITORY" "$WORKSPACE_BRANCH" >/dev/null 2>&1; then
@@ -210,6 +228,17 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 	dbEnabled := tmpl.Spec.Database != nil
 	databaseEnv := branchDatabaseEnv(ws, tmpl, resourceName)
 
+	// Only set when the caller referenced a credential Secret (5.1-5.3):
+	// with none, the workspace clones anonymously exactly as it did before
+	// this env var existed, and an unset GIT_ASKPASS would break that.
+	var gitCredentialEnv []corev1.EnvVar
+	if ws.Spec.GitCredentialSecretRef != nil {
+		gitCredentialEnv = []corev1.EnvVar{
+			secretEnv("GIT_CREDENTIAL_TOKEN", *ws.Spec.GitCredentialSecretRef, gitCredentialTokenKey),
+			{Name: "GIT_ASKPASS", Value: gitAskpassPath},
+		}
+	}
+
 	initEnv := append([]corev1.EnvVar{
 		{Name: "WORKSPACE_DIR", Value: workingDirPath},
 		{Name: "WORKSPACE_REPOSITORY", Value: ws.Spec.Repository},
@@ -218,6 +247,7 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		{Name: "CLAUDE_CONFIG_DIR", Value: claudeConfigPath},
 		{Name: "WORKSPACE_CACHE_DIR", Value: cacheDirPath},
 	}, evacuationEnv...)
+	initEnv = append(initEnv, gitCredentialEnv...)
 
 	// The supervisor derives the rest of the layout from the mount root, so a
 	// path change stays in one place.
@@ -228,6 +258,9 @@ func buildStatefulSet(ws *devplatformv1alpha1.Workspace, tmpl *devplatformv1alph
 		{Name: "SSH_CA_PUBLIC_KEY", Value: sshCAMountPath + "/" + sshCAPublicKeyKey},
 		{Name: "BLACKBOARD_CLAUDE_MD", Value: blackboardMountPath + "/" + ClaudeMDKey},
 	}, evacuationEnv...)
+	// The init container needs this to clone; the long-running workspace
+	// container needs it for any later git push/pull Claude Code performs.
+	workspaceEnv = append(workspaceEnv, gitCredentialEnv...)
 	// 8.8: every process started under the working directory inherits the
 	// branch's own connection, so nothing in the repository has to be
 	// configured for a per-branch database.
