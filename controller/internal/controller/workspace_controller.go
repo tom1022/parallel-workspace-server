@@ -232,11 +232,19 @@ func (r *WorkspaceReconciler) reconcileProvisioning(ctx context.Context, ws *dev
 
 	// 2.5: admission runs before any incidental resource (including the
 	// database) is created, so a workspace held for resource limits leaves no
-	// partial substrate behind to roll back.
-	if pending, err := r.reconcileAdmission(ctx, ws, tmpl); err != nil {
-		return ctrl.Result{}, err
-	} else if pending != nil {
-		return *pending, nil
+	// partial substrate behind to roll back. Once WorkspaceId is set, PVC/STS
+	// already exist, so admission must not run again: resourceQuotaHasRoom and
+	// nodeDiskBudgetHasRoom read live, self-inclusive aggregates (namespace
+	// ResourceQuota.Status.Used, other Workspaces' declared storage) that
+	// come to include this workspace's own already-admitted consumption on a
+	// later reconcile, which would otherwise re-block it on itself forever
+	// (no D-1 timeout applies to this path; see file header).
+	if ws.Status.WorkspaceId == "" {
+		if pending, err := r.reconcileAdmission(ctx, ws, tmpl); err != nil {
+			return ctrl.Result{}, err
+		} else if pending != nil {
+			return *pending, nil
+		}
 	}
 
 	resourceName, err := r.resolveResourceName(ctx, ws)

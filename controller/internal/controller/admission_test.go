@@ -216,3 +216,71 @@ func TestReconcile_HoldsForNodeDiskBudgetExceeded(t *testing.T) {
 
 	assertHeldForResourceWaiting(t, ctx, ns, "ws-disk", "QuotaExceeded")
 }
+
+// TestReconcile_AdmissionNotReevaluatedAfterAdmit reproduces a real-cluster
+// bug: resourceQuotaHasRoom reads ResourceQuota.Status.Used, which the quota
+// admission plugin updates synchronously once this very workspace's own Pod
+// is accepted. A tight quota (Hard == exactly one workspace's requests) then
+// re-blocks the *same* workspace on its own already-counted consumption at
+// every reconcile after the one that created it, pinning status.phase in
+// Provisioning forever even though the Pod is healthy and Ready.
+func TestReconcile_AdmissionNotReevaluatedAfterAdmit(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	createTemplate(t, ctx, ns, "default")
+
+	rq := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: workspaceResourceQuotaName, Namespace: ns},
+		Spec:       corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{"requests.cpu": resource.MustParse("100m")}},
+	}
+	if err := testClient.Create(ctx, rq); err != nil {
+		t.Fatalf("create ResourceQuota: %v", err)
+	}
+	// Room for exactly one workspace, none used yet: the first reconcile must
+	// be admitted and provision.
+	rq.Status = corev1.ResourceQuotaStatus{
+		Hard: corev1.ResourceList{"requests.cpu": resource.MustParse("100m")},
+		Used: corev1.ResourceList{"requests.cpu": resource.MustParse("0")},
+	}
+	if err := testClient.Status().Update(ctx, rq); err != nil {
+		t.Fatalf("set ResourceQuota status: %v", err)
+	}
+
+	createWorkspace(t, ctx, ns, "ws-self-block", "https://gitea.fickledev.com/tom1022/demo.git", "feature/self-block", "default")
+	r := newTestReconciler()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ws-self-block", Namespace: ns}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("first reconcile (admit + provision): %v", err)
+	}
+	ws := provisionIntGet(t, ctx, req.NamespacedName)
+	wantID := ws.Status.WorkspaceId
+	if wantID == "" {
+		t.Fatal("workspaceId empty after first reconcile")
+	}
+
+	// Real cluster behavior: the quota admission plugin has now synchronously
+	// accounted this workspace's own Pod into Status.Used.
+	if err := testClient.Get(ctx, types.NamespacedName{Name: workspaceResourceQuotaName, Namespace: ns}, rq); err != nil {
+		t.Fatalf("get ResourceQuota: %v", err)
+	}
+	rq.Status.Used = corev1.ResourceList{"requests.cpu": resource.MustParse("100m")}
+	if err := testClient.Status().Update(ctx, rq); err != nil {
+		t.Fatalf("simulate quota usage after admission: %v", err)
+	}
+
+	markStatefulSetReady(t, ctx, ns, wantID)
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("second reconcile (pod ready): %v", err)
+	}
+
+	got := provisionIntGet(t, ctx, req.NamespacedName)
+	if got.Status.Phase != devplatformv1alpha1.WorkspacePhaseReady {
+		t.Fatalf("phase = %q, want Ready; admission must not re-block a workspace that already has provisioned substrate", got.Status.Phase)
+	}
+	for _, c := range got.Status.Conditions {
+		if c.Type == conditionResourceWaiting && c.Status == metav1.ConditionTrue {
+			t.Errorf("ResourceWaiting=True after admit, reason=%q: admission was re-evaluated against the workspace's own already-counted usage", c.Reason)
+		}
+	}
+}

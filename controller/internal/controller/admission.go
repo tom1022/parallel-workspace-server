@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	devplatformv1alpha1 "github.com/tom1022/gitops-apps/apps/devplatform/controller/api/v1alpha1"
 )
@@ -54,6 +55,8 @@ func (r *WorkspaceReconciler) reconcileAdmission(ctx context.Context, ws *devpla
 	}
 
 	if blocked {
+		log.FromContext(ctx).Info("workspace held for admission",
+			"workspace", ws.Name, "namespace", ws.Namespace, "reason", reason, "message", message)
 		meta.SetStatusCondition(&ws.Status.Conditions, metav1.Condition{
 			Type:    conditionResourceWaiting,
 			Status:  metav1.ConditionTrue,
